@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Invoice Stamping</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./assets/css/styles.css">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js" defer></script>
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js" defer></script>
+    <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+    <script type="module" src="./assets/js/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div class="hero-top">
+          <div class="hero-side hero-side-left"></div>
+          <div class="hero-center">
+            <h1>Invoice Stamping</h1>
+            <nav class="header-nav" aria-label="Sections">
+              <button class="tab-button is-active" type="button" data-tab-target="stamp-tab">Stamp</button>
+              <button class="tab-button" type="button" data-tab-target="downloader-tab">Invoice Downloader</button>
+            </nav>
+          </div>
+          <div class="hero-side hero-side-right">
+            <button class="microsoft-auth-btn" id="microsoft-auth-btn" type="button">
+              <img src="./assets/img/microsoft-svgrepo-com.svg" alt="" aria-hidden="true">
+              <span>Connect</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div id="flash" class="flash" hidden></div>
+
+      <main id="main-panel" hidden>
+        <section class="tab-panel is-active" id="stamp-tab">
+          <form class="work-surface" id="stamp-form">
+            <div class="section-heading">
+              <h2>Stamp and upload invoice</h2>
+              <div class="toolbar">
+                <button class="btn" id="autofill-btn" type="button">
+                  <i data-lucide="sparkles"></i>
+                  <span>Auto-fill</span>
+                </button>
+                <button class="btn btn-primary" id="process-btn" type="submit">
+                  <i data-lucide="upload-cloud"></i>
+                  <span>Process</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="field field-wide">
+                <span>Invoice file</span>
+                <label class="dropzone" id="invoice-dropzone" for="invoice-file">
+                  <input id="invoice-file" type="file" accept=".eml,.pdf,.zip,.jpg,.jpeg,.png,.webp" multiple>
+                  <span class="dropzone-icon"><i data-lucide="file-up"></i></span>
+                  <strong id="dropzone-title">Drop files here</strong>
+                  <small id="dropzone-caption">or click to select EML, PDFs, ZIPs, JPG, PNG, or WebP</small>
+                </label>
+                <ul class="upload-list" id="upload-list" aria-label="Queued files"></ul>
+                <small>EML, PDF, ZIP with PDFs/images, or direct image upload. TIFF and BMP are not converted in this web version.</small>
+              </div>
+
+              <label class="field">
+                <span>Date</span>
+                <input id="date-input" type="date" required>
+              </label>
+              <label class="field">
+                <span>Bank</span>
+                <select id="bank-input" required></select>
+              </label>
+              <label class="field">
+                <span>Company</span>
+                <select id="company-input" required></select>
+              </label>
+              <label class="field">
+                <span>Category</span>
+                <select id="category-input" required></select>
+              </label>
+              <label class="field">
+                <span>Payment Code</span>
+                <input id="payment-code-input" type="text" autocomplete="off" required>
+              </label>
+              <label class="field">
+                <span>Client Invoice</span>
+                <input id="client-invoice-input" type="text" autocomplete="off" required>
+              </label>
+            </div>
+          </form>
+
+          <section class="result-panel" id="stamp-result" hidden>
+            <div class="result-header">
+              <h3>Result</h3>
+              <a class="btn" id="download-link" download>
+                <i data-lucide="download"></i>
+                <span>Download PDF</span>
+              </a>
+            </div>
+            <dl>
+              <dt>Bank folder</dt>
+              <dd id="bank-path-output"></dd>
+              <dt>Category folder</dt>
+              <dd id="category-path-output"></dd>
+            </dl>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="downloader-tab">
+          <div class="work-surface">
+            <div class="section-heading">
+              <h2>Invoice Downloader</h2>
+              <button class="btn btn-primary" id="invoice-download-btn" type="button">
+                <i data-lucide="download-cloud"></i>
+                <span>Download invoices</span>
+              </button>
+            </div>
+            <div class="downloader-body">
+              <div class="download-status">
+                <span id="download-status-text">Ready to download the CNET export.</span>
+                <strong id="download-count">0 / 0</strong>
+              </div>
+              <div class="progress-track" aria-label="Progreso de descarga">
+                <div class="progress-fill" id="download-progress-fill"></div>
+              </div>
+              <div class="metric-grid">
+                <div class="metric">
+                  <span>CSV rows</span>
+                  <strong id="download-total-count">-</strong>
+                </div>
+                <div class="metric">
+                  <span>PDFs uploaded</span>
+                  <strong id="download-success-count">-</strong>
+                </div>
+                <div class="metric">
+                  <span>Skipped</span>
+                  <strong id="download-skipped-count">-</strong>
+                </div>
+              </div>
+              <section class="download-errors" id="download-errors" hidden>
+                <h3>Errors</h3>
+                <ul id="download-error-list"></ul>
+              </section>
+              <section class="file-explorer">
+                <div class="file-explorer-header">
+                  <div>
+                    <h3>File Explorer</h3>
+                    <span id="file-tree-total">No scan loaded.</span>
+                  </div>
+                  <div class="file-explorer-tools">
+                    <label class="search-field">
+                      <i data-lucide="search"></i>
+                      <input id="file-tree-search" type="search" placeholder="Search files or folders">
+                    </label>
+                    <button class="btn" id="refresh-file-tree-btn" type="button">
+                      <i data-lucide="folder-tree"></i>
+                      <span>Refresh tree</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="file-tree" id="file-tree"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <section class="connect-panel" id="connect-panel">
+        <button class="auth-button auth-button-large" id="connect-cta" type="button">
+          <img src="./assets/img/microsoft-svgrepo-com.svg" alt="" aria-hidden="true">
+          <span>Connect Microsoft</span>
+        </button>
+      </section>
+    </div>
+  </body>
+</html>

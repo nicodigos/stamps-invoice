@@ -1,0 +1,19 @@
+{
+  "name": "netlify-sello",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Version Netlify de la app Streamlit para sellar invoices y refrescar Pagos Periodos.",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "dev:netlify": "netlify dev",
+    "build": "echo \"No build step required\""
+  },
+  "dependencies": {
+    "mysql2": "^3.11.5",
+    "postal-mime": "^2.7.4",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.37.0"
+  }
+}
