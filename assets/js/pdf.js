@@ -52,6 +52,22 @@ export async function fileToAnalysisPayload(file) {
   };
 }
 
+export async function emailFileToPreview(file) {
+  const ext = extensionOf(file.name);
+  if (!EML_EXTS.has(ext)) return null;
+  const parsed = await parseEmailFile(file, { includeAllAttachments: true });
+  return {
+    sourceName: file.name,
+    email: parsed.email,
+    attachments: parsed.attachments.map((attachment) => ({
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.bytes.byteLength,
+      bytes: attachment.bytes,
+    })),
+  };
+}
+
 export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoice }) {
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
   const doc = await PDFDocument.load(inputBytes);
@@ -125,10 +141,10 @@ async function zipToPdfByteList(file) {
   return out;
 }
 
-async function parseEmailFile(file) {
+async function parseEmailFile(file, options = {}) {
   const { default: PostalMime } = await import(POSTAL_MIME_URL);
   const email = await PostalMime.parse(await file.arrayBuffer());
-  const attachments = (email.attachments || [])
+  let attachments = (email.attachments || [])
     .map((attachment) => ({
       name: attachment.filename || attachment.name || "attachment",
       mimeType: attachment.mimeType || attachment.contentType || "",
@@ -137,10 +153,15 @@ async function parseEmailFile(file) {
       related: Boolean(attachment.related),
       bytes: toUint8Array(attachment.content),
     }))
-    .filter((attachment) => isProcessableAttachment(attachment));
+    .filter((attachment) => isRealAttachment(attachment));
 
-  if (!attachments.length) {
-    throw new Error(`El email "${file.name}" no tiene adjuntos PDF o imagen soportados.`);
+  if (!options.includeAllAttachments) {
+    attachments = attachments.filter((attachment) => isProcessableAttachment(attachment));
+  }
+
+  if (!attachments.length && !options.includeAllAttachments) {
+    const attachmentType = options.includeAllAttachments ? "adjuntos descargables" : "adjuntos PDF o imagen soportados";
+    throw new Error(`El email "${file.name}" no tiene ${attachmentType}.`);
   }
 
   return {
@@ -154,10 +175,13 @@ async function parseEmailFile(file) {
   };
 }
 
+function isRealAttachment(attachment) {
+  return attachment.disposition === "attachment" || (!attachment.related && !attachment.contentId);
+}
+
 function isProcessableAttachment(attachment) {
   const ext = extensionOf(attachment.name);
-  const realAttachment = attachment.disposition === "attachment" || (!attachment.related && !attachment.contentId);
-  return realAttachment && (PDF_EXTS.has(ext) || IMAGE_EXTS.has(ext));
+  return isRealAttachment(attachment) && (PDF_EXTS.has(ext) || IMAGE_EXTS.has(ext));
 }
 
 async function fileContentToPdfBytes(bytes, name) {
@@ -186,10 +210,12 @@ async function contentToAnalysisImages(bytes, name, label) {
     return images;
   }
   if (IMAGE_EXTS.has(ext)) {
+    const image = await imageBytesToPngPayload(bytes, ext);
     return [{
       sourceName: label,
       pageNumber: 1,
-      imageBase64: await imageBytesToPngBase64(bytes, ext),
+      colorHint: image.colorHint,
+      imageBase64: image.imageBase64,
     }];
   }
   return [];
@@ -208,18 +234,28 @@ async function renderPdfBytesToImages(pdfBytes, sourceName) {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvasContext: context, viewport }).promise;
+    const colorHint = pageNumber === 1 ? detectBankColorHint(canvas) : null;
     images.push({
       sourceName,
       pageNumber,
+      colorHint,
       imageBase64: canvas.toDataURL("image/png").replace(/^data:image\/png;base64,/, ""),
     });
   }
   return images;
 }
 
-async function imageBytesToPngBase64(bytes, ext) {
+async function imageBytesToPngPayload(bytes, ext) {
   if (ext === ".png") {
-    return bytesToBase64(bytes);
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    return {
+      colorHint: detectBankColorHint(canvas),
+      imageBase64: bytesToBase64(bytes),
+    };
   }
   const blobType = ext === ".webp" ? "image/webp" : "image/jpeg";
   const bitmap = await createImageBitmap(new Blob([bytes], { type: blobType }));
@@ -229,7 +265,111 @@ async function imageBytesToPngBase64(bytes, ext) {
   canvas.getContext("2d").drawImage(bitmap, 0, 0);
   const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!pngBlob) throw new Error("No se pudo preparar la imagen para AI.");
-  return bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer()));
+  return {
+    colorHint: detectBankColorHint(canvas),
+    imageBase64: bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer())),
+  };
+}
+
+function detectBankColorHint(canvas) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context || !canvas.width || !canvas.height) return null;
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const targets = [
+    { bank: "Desjardins", color: "light green", rgb: [159, 204, 113] },
+    { bank: "National Bank", color: "light blue", rgb: [104, 171, 218] },
+    { bank: "Scotia Bank", color: "red", rgb: [207, 67, 65] },
+  ];
+  const counts = Object.fromEntries(targets.map((target) => [target.bank, 0]));
+  const samplePoints = randomColorPoints(imageData, canvas.width, canvas.height, 20);
+  if (samplePoints.length < 6) return null;
+
+  for (const point of samplePoints) {
+    const nearest = targets
+      .map((target) => ({ ...target, distance: colorDistance(point.rgb, target.rgb) }))
+      .sort((left, right) => left.distance - right.distance)[0];
+    if (nearest && nearest.distance <= 125) counts[nearest.bank] += 1;
+  }
+
+  const ranked = Object.entries(counts).sort((left, right) => right[1] - left[1]);
+  const [bank, count] = ranked[0] || ["", 0];
+  const secondCount = ranked[1]?.[1] || 0;
+  if (!bank || count < 4 || count - secondCount < 2) return null;
+
+  const target = targets.find((item) => item.bank === bank);
+  return {
+    bank,
+    color: target?.color || "",
+    confidence: Math.round((count / samplePoints.length) * 100) / 100,
+    sampleCount: samplePoints.length,
+    counts,
+  };
+}
+
+function randomColorPoints(imageData, width, height, desiredCount) {
+  const points = [];
+  const maxAttempts = 1400;
+  const edgePaddingX = Math.max(1, Math.floor(width * 0.03));
+  const edgePaddingY = Math.max(1, Math.floor(height * 0.03));
+
+  for (let attempt = 0; attempt < maxAttempts && points.length < desiredCount; attempt += 1) {
+    const x = randomInt(edgePaddingX, Math.max(edgePaddingX + 1, width - edgePaddingX));
+    const y = randomInt(edgePaddingY, Math.max(edgePaddingY + 1, height - edgePaddingY));
+    const rgb = averagePatchColor(imageData, width, height, x, y, 3);
+    if (isUsefulBankColorSample(rgb)) {
+      points.push({ rgb });
+    }
+  }
+
+  return points;
+}
+
+function randomInt(min, max) {
+  return Math.floor(min + Math.random() * Math.max(1, max - min));
+}
+
+function averagePatchColor(imageData, width, height, centerX, centerY, radius) {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let count = 0;
+
+  for (let y = Math.max(0, centerY - radius); y <= Math.min(height - 1, centerY + radius); y += 1) {
+    for (let x = Math.max(0, centerX - radius); x <= Math.min(width - 1, centerX + radius); x += 1) {
+      const index = (y * width + x) * 4;
+      red += imageData.data[index];
+      green += imageData.data[index + 1];
+      blue += imageData.data[index + 2];
+      count += 1;
+    }
+  }
+
+  return [
+    Math.round(red / count),
+    Math.round(green / count),
+    Math.round(blue / count),
+  ];
+}
+
+function isUsefulBankColorSample(rgb) {
+  const brightness = (rgb[0] + rgb[1] + rgb[2]) / 3;
+  if (brightness < 85 || brightness > 245) return false;
+  return colorfulnessScore(rgb) >= 28;
+}
+
+function colorfulnessScore([red, green, blue]) {
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  return max - min;
+}
+
+function colorDistance(left, right) {
+  return Math.sqrt(
+    ((left[0] - right[0]) ** 2)
+    + ((left[1] - right[1]) ** 2)
+    + ((left[2] - right[2]) ** 2),
+  );
 }
 
 async function imageToPdfBytes(bytes, ext) {

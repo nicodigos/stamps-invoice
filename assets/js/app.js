@@ -9,7 +9,7 @@ import {
   COMPANY_SHAREPOINT_DIRS,
 } from "./data.js";
 import { uploadSharePointFile } from "./graph.js";
-import { fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
+import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
   clearFlash,
@@ -34,6 +34,9 @@ const elements = {
   dropzoneTitle: $("#dropzone-title"),
   dropzoneCaption: $("#dropzone-caption"),
   uploadList: $("#upload-list"),
+  emailPreviewPanel: $("#email-preview-panel"),
+  emailPreviewCount: $("#email-preview-count"),
+  emailPreviewList: $("#email-preview-list"),
   dateInput: $("#date-input"),
   companyInput: $("#company-input"),
   bankInput: $("#bank-input"),
@@ -65,6 +68,8 @@ boot().catch((error) => showFlash(error.message, "error"));
 
 let queuedFiles = [];
 let currentFileTreeResult = null;
+let currentEmailPreviews = [];
+let emailPreviewRenderId = 0;
 
 async function boot() {
   wireTabs();
@@ -118,6 +123,12 @@ function wireButtons() {
     queuedFiles = queuedFiles.filter((item) => item.id !== button.dataset.fileId);
     renderUploadQueue();
   });
+  elements.emailPreviewList.addEventListener("click", (event) => {
+    const button = event.target.closest(".email-attachment-download");
+    if (!button) return;
+    event.preventDefault();
+    runGuarded(() => downloadEmailAttachment(button.dataset.emailIndex, button.dataset.attachmentIndex));
+  });
   elements.stampForm.addEventListener("submit", (event) => {
     event.preventDefault();
     runGuarded(processAndUploadInvoice);
@@ -158,6 +169,7 @@ function renderUploadQueue() {
     elements.dropzoneTitle.textContent = "Drop files here";
     elements.dropzoneCaption.textContent = "or click to select EML, PDFs, ZIPs, JPG, PNG, or WebP";
     elements.uploadList.innerHTML = "";
+    renderEmailPreviews();
     return;
   }
   elements.dropzoneTitle.textContent = `${queuedFiles.length} file${queuedFiles.length === 1 ? "" : "s"} queued`;
@@ -174,6 +186,90 @@ function renderUploadQueue() {
     </li>
   `).join("");
   window.lucide?.createIcons();
+  renderEmailPreviews();
+}
+
+async function renderEmailPreviews() {
+  const renderId = ++emailPreviewRenderId;
+  const emailFiles = queuedFiles
+    .map((item) => item.file)
+    .filter((file) => /\.eml$/i.test(file.name || ""));
+
+  currentEmailPreviews = [];
+  if (!emailFiles.length) {
+    elements.emailPreviewPanel.hidden = true;
+    elements.emailPreviewCount.textContent = "";
+    elements.emailPreviewList.innerHTML = "";
+    return;
+  }
+
+  elements.emailPreviewPanel.hidden = false;
+  elements.emailPreviewCount.textContent = "Reading...";
+  elements.emailPreviewList.innerHTML = "";
+
+  const previews = await Promise.all(emailFiles.map(async (file) => {
+    try {
+      return await emailFileToPreview(file);
+    } catch (error) {
+      return {
+        sourceName: file.name,
+        error: error.message || String(error),
+        email: { subject: "", from: "", date: "", text: "" },
+        attachments: [],
+      };
+    }
+  }));
+
+  if (renderId !== emailPreviewRenderId) return;
+  currentEmailPreviews = previews.filter(Boolean);
+  elements.emailPreviewCount.textContent = `${currentEmailPreviews.length} email${currentEmailPreviews.length === 1 ? "" : "s"}`;
+  elements.emailPreviewList.innerHTML = currentEmailPreviews.map(renderEmailPreview).join("");
+  window.lucide?.createIcons();
+}
+
+function renderEmailPreview(preview, emailIndex) {
+  const email = preview.email || {};
+  const attachments = Array.isArray(preview.attachments) ? preview.attachments : [];
+  const attachmentHtml = attachments.length
+    ? attachments.map((attachment, attachmentIndex) => `
+      <li>
+        <span>
+          <strong title="${escapeHtml(attachment.name)}">${escapeHtml(attachment.name)}</strong>
+          <small>${escapeHtml(attachment.mimeType || "Attachment")} &middot; ${formatFileSize(attachment.size)}</small>
+        </span>
+        <button class="email-attachment-download" type="button" data-email-index="${emailIndex}" data-attachment-index="${attachmentIndex}" title="Download attachment" aria-label="Download ${escapeHtml(attachment.name)}">
+          <i data-lucide="download"></i>
+        </button>
+      </li>
+    `).join("")
+    : "<li><span><strong>No attachments found</strong></span></li>";
+
+  return `
+    <article class="email-preview-card">
+      <div class="email-preview-meta">
+        <strong title="${escapeHtml(preview.sourceName)}">${escapeHtml(preview.sourceName)}</strong>
+        ${preview.error ? `<small class="email-preview-error">${escapeHtml(preview.error)}</small>` : ""}
+        <small>${escapeHtml(email.from || "Unknown sender")}${email.date ? ` &middot; ${escapeHtml(email.date)}` : ""}</small>
+      </div>
+      <dl class="email-preview-details">
+        <dt>Subject</dt>
+        <dd>${escapeHtml(email.subject || "(No subject)")}</dd>
+        <dt>Text</dt>
+        <dd class="email-preview-text">${escapeHtml(email.text || "(No text body)")}</dd>
+      </dl>
+      <ul class="email-attachment-list">
+        ${attachmentHtml}
+      </ul>
+    </article>
+  `;
+}
+
+function downloadEmailAttachment(emailIndex, attachmentIndex) {
+  const preview = currentEmailPreviews[Number(emailIndex)];
+  const attachment = preview?.attachments?.[Number(attachmentIndex)];
+  if (!attachment) throw new Error("Attachment not found.");
+  const blob = new Blob([attachment.bytes], { type: attachment.mimeType || "application/octet-stream" });
+  triggerBrowserDownload(blob, attachment.name || "attachment");
 }
 
 async function autoFillFromQueuedFiles() {

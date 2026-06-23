@@ -648,6 +648,137 @@ main {
   background: var(--danger-soft);
 }
 
+.email-preview-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fbfcfd;
+}
+
+.email-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.email-preview-header span,
+.email-preview-meta small,
+.email-attachment-list small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.email-preview-list {
+  display: grid;
+  gap: 12px;
+}
+
+.email-preview-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.email-preview-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.email-preview-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email-preview-error {
+  color: var(--danger) !important;
+}
+
+.email-preview-details {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.email-preview-details dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.email-preview-details dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+
+.email-preview-text {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.email-attachment-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.email-attachment-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 6px;
+  background: #f5f8fb;
+}
+
+.email-attachment-list span {
+  min-width: 0;
+}
+
+.email-attachment-list strong,
+.email-attachment-list small {
+  display: block;
+}
+
+.email-attachment-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email-attachment-download {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.email-attachment-download:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .flash {
   padding: 12px 14px;
   border-radius: var(--radius);
@@ -790,6 +921,10 @@ dd {
   }
 
   dl {
+    grid-template-columns: 1fr;
+  }
+
+  .email-preview-details {
     grid-template-columns: 1fr;
   }
 }

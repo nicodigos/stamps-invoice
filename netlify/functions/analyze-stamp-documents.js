@@ -27,6 +27,7 @@ exports.handler = async function handler(event) {
         visionPages.push({
           sourceName: image.sourceName || document.sourceName || "",
           pageNumber: image.pageNumber || 1,
+          colorHint: image.colorHint || null,
           fullText: vision.full_text || "",
         });
       }
@@ -70,6 +71,9 @@ async function classifyStampFields({ emailContexts, visionPages, options, apiKey
     "Human will validate after you fill the form, so provide best suggestions rather than blanks when there is useful evidence.",
     "Use empty string for bank only if no bank evidence exists.",
     "payment_code and client_invoice should be short identifiers from visible payment/invoice/reference/period evidence.",
+    "Use visual color evidence only after deciding a page/document is bank-related, such as a payment confirmation, transfer, deposit, bank transaction, or account document.",
+    "For bank-related pages, colorHint maps as: light green means Desjardins, light blue means National Bank, red means Scotia Bank.",
+    "Ignore colorHint for invoices, bills, receipts, supplier documents, or any page that does not appear to be from a bank.",
   ].join(" ");
 
   const userPrompt = [
@@ -79,6 +83,7 @@ async function classifyStampFields({ emailContexts, visionPages, options, apiKey
     `Bank options: ${options.banks.join(" | ")}`,
     "Important mappings: T4A or PAGO T4A should map to 5 T4A Payments. 1001298527 ONTARIO should map to 1001298527 ONTARIO INC. Scotia should map to Scotia Bank.",
     "date must be YYYY-MM-DD when possible.",
+    "First decide from OCR/email whether each page is bank-related or invoice-related. If bank text is weak or absent on a bank-related page, use first-page colorHint to choose the closest bank option. Do not use colorHint from non-bank pages.",
     "Return confidence 0-1 for each field.",
     `Email context:\n${JSON.stringify(emailContexts).slice(0, 10000)}`,
     `Vision OCR pages:\n${JSON.stringify(visionPages.map((page) => ({ ...page, fullText: String(page.fullText || "").slice(0, 9000) }))).slice(0, 26000)}`,
