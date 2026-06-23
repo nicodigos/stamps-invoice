@@ -59,12 +59,13 @@ export async function emailFileToPreview(file) {
   return {
     sourceName: file.name,
     email: parsed.email,
-    attachments: parsed.attachments.map((attachment) => ({
+    attachments: await Promise.all(parsed.attachments.map(async (attachment) => ({
       name: attachment.name,
       mimeType: attachment.mimeType,
       size: attachment.bytes.byteLength,
+      thumbnailDataUrl: await attachmentToThumbnailDataUrl(attachment.bytes, attachment.name),
       bytes: attachment.bytes,
-    })),
+    }))),
   };
 }
 
@@ -189,6 +190,46 @@ async function fileContentToPdfBytes(bytes, name) {
   if (PDF_EXTS.has(ext)) return bytes;
   if (IMAGE_EXTS.has(ext)) return imageToPdfBytes(bytes, ext);
   throw new Error(`Adjunto no soportado: ${name}`);
+}
+
+async function attachmentToThumbnailDataUrl(bytes, name) {
+  const ext = extensionOf(name);
+  try {
+    if (PDF_EXTS.has(ext)) return pdfBytesToThumbnailDataUrl(bytes);
+    if (IMAGE_EXTS.has(ext)) return imageBytesToThumbnailDataUrl(bytes, ext);
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+async function pdfBytesToThumbnailDataUrl(pdfBytes) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice ? pdfBytes.slice() : pdfBytes });
+  const pdf = await loadingTask.promise;
+  const page = await pdf.getPage(1);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(180 / baseViewport.width, 132 / baseViewport.height);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  canvas.width = Math.max(1, Math.floor(viewport.width));
+  canvas.height = Math.max(1, Math.floor(viewport.height));
+  await page.render({ canvasContext: context, viewport }).promise;
+  return canvas.toDataURL("image/png");
+}
+
+async function imageBytesToThumbnailDataUrl(bytes, ext) {
+  const blobType = ext === ".webp" ? "image/webp" : ext === ".png" ? "image/png" : "image/jpeg";
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: blobType }));
+  const maxWidth = 180;
+  const maxHeight = 132;
+  const scale = Math.min(maxWidth / bitmap.width, maxHeight / bitmap.height, 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
 }
 
 async function contentToAnalysisImages(bytes, name, label) {

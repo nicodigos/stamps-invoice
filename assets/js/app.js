@@ -233,6 +233,7 @@ function renderEmailPreview(preview, emailIndex) {
   const attachmentHtml = attachments.length
     ? attachments.map((attachment, attachmentIndex) => `
       <li>
+        ${renderAttachmentThumbnail(attachment)}
         <span>
           <strong title="${escapeHtml(attachment.name)}">${escapeHtml(attachment.name)}</strong>
           <small>${escapeHtml(attachment.mimeType || "Attachment")} &middot; ${formatFileSize(attachment.size)}</small>
@@ -261,6 +262,21 @@ function renderEmailPreview(preview, emailIndex) {
         ${attachmentHtml}
       </ul>
     </article>
+  `;
+}
+
+function renderAttachmentThumbnail(attachment) {
+  if (attachment.thumbnailDataUrl) {
+    return `
+      <span class="email-attachment-thumb">
+        <img src="${escapeHtml(attachment.thumbnailDataUrl)}" alt="">
+      </span>
+    `;
+  }
+  return `
+    <span class="email-attachment-thumb email-attachment-thumb-empty">
+      <i data-lucide="file"></i>
+    </span>
   `;
 }
 
