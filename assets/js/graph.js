@@ -41,9 +41,28 @@ async function graphText(url) {
   return response.text();
 }
 
+async function graphArrayBuffer(url) {
+  const response = await fetch(url, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new GraphRequestError(await response.text(), response.status);
+  }
+  return response.arrayBuffer();
+}
+
 function isNotFound(error) {
   return error instanceof GraphRequestError
     && (error.status === 404 || /itemNotFound|could not be found|not found/i.test(error.message || ""));
+}
+
+function isAccessDenied(error) {
+  return error instanceof GraphRequestError
+    && (error.status === 403 || /accessDenied|access denied/i.test(error.message || ""));
+}
+
+function isLookupMiss(error) {
+  return isNotFound(error) || isAccessDenied(error);
 }
 
 export async function resolveDriveId() {
@@ -78,48 +97,132 @@ export async function downloadSharePointTextFile(path) {
   const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
   const fileName = String(path || "").split("/").pop();
 
+  const driveId = await resolveDriveId();
+
   try {
-    return await graphText(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/content`);
+    return await graphText(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
   } catch (error) {
-    if (!isNotFound(error)) throw error;
+    if (!isLookupMiss(error)) throw error;
   }
 
-  const oneDriveMatch = await findMyDriveFileByName(fileName);
-  if (oneDriveMatch) {
-    return graphText(`${GRAPH_BASE}/drives/${oneDriveMatch.parentReference.driveId}/items/${oneDriveMatch.id}/content`);
+  const sharePointMatch = await findDriveFileByName(driveId, fileName);
+  if (sharePointMatch) {
+    try {
+      return await graphText(`${GRAPH_BASE}/drives/${sharePointMatch.parentReference.driveId}/items/${sharePointMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
   }
 
-  const searchMatch = await findFileWithMicrosoftSearch(fileName);
-  if (searchMatch) {
-    return graphText(`${GRAPH_BASE}/drives/${searchMatch.parentReference.driveId}/items/${searchMatch.id}/content`);
+  const folderMatch = await findFileInDriveFolderByName(driveId, parentPath(path), fileName);
+  if (folderMatch) {
+    try {
+      return await graphText(`${GRAPH_BASE}/drives/${folderMatch.parentReference.driveId}/items/${folderMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
   }
 
   const accessibleDriveMatch = await findAccessibleDriveFile(path, fileName);
   if (accessibleDriveMatch) {
-    return graphText(`${GRAPH_BASE}/drives/${accessibleDriveMatch.parentReference.driveId}/items/${accessibleDriveMatch.id}/content`);
-  }
-
-  let driveId = "";
-  try {
-    driveId = await resolveDriveId();
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
-  }
-
-  if (driveId) {
     try {
-      return await graphText(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
+      return await graphText(`${GRAPH_BASE}/drives/${accessibleDriveMatch.parentReference.driveId}/items/${accessibleDriveMatch.id}/content`);
     } catch (error) {
-      if (!isNotFound(error)) throw error;
-    }
-
-    const sharePointMatch = await findDriveFileByName(driveId, fileName);
-    if (sharePointMatch) {
-      return graphText(`${GRAPH_BASE}/drives/${sharePointMatch.parentReference.driveId}/items/${sharePointMatch.id}/content`);
+      if (!isLookupMiss(error)) throw error;
     }
   }
 
-  throw new GraphRequestError(`No se encontro ${fileName} en SharePoint ni en OneDrive.`, 404);
+  try {
+    return await graphText(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/content`);
+  } catch (error) {
+    if (!isLookupMiss(error)) throw error;
+  }
+
+  const oneDriveMatch = await findMyDriveFileByName(fileName);
+  if (oneDriveMatch) {
+    try {
+      return await graphText(`${GRAPH_BASE}/drives/${oneDriveMatch.parentReference.driveId}/items/${oneDriveMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  const searchMatch = await findFileWithMicrosoftSearch(fileName);
+  if (searchMatch) {
+    try {
+      return await graphText(`${GRAPH_BASE}/drives/${searchMatch.parentReference.driveId}/items/${searchMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  throw new GraphRequestError(await fileAccessMessage(driveId, path, fileName), 403);
+}
+
+export async function downloadSharePointFile(path) {
+  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
+  const fileName = String(path || "").split("/").pop();
+
+  const driveId = await resolveDriveId();
+
+  try {
+    return await graphArrayBuffer(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
+  } catch (error) {
+    if (!isLookupMiss(error)) throw error;
+  }
+
+  const sharePointMatch = await findDriveFileByName(driveId, fileName);
+  if (sharePointMatch) {
+    try {
+      return await graphArrayBuffer(`${GRAPH_BASE}/drives/${sharePointMatch.parentReference.driveId}/items/${sharePointMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  const folderMatch = await findFileInDriveFolderByName(driveId, parentPath(path), fileName);
+  if (folderMatch) {
+    try {
+      return await graphArrayBuffer(`${GRAPH_BASE}/drives/${folderMatch.parentReference.driveId}/items/${folderMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  const accessibleDriveMatch = await findAccessibleDriveFile(path, fileName);
+  if (accessibleDriveMatch) {
+    try {
+      return await graphArrayBuffer(`${GRAPH_BASE}/drives/${accessibleDriveMatch.parentReference.driveId}/items/${accessibleDriveMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  try {
+    return await graphArrayBuffer(`${GRAPH_BASE}/me/drive/root:/${encodedPath}:/content`);
+  } catch (error) {
+    if (!isLookupMiss(error)) throw error;
+  }
+
+  const oneDriveMatch = await findMyDriveFileByName(fileName);
+  if (oneDriveMatch) {
+    try {
+      return await graphArrayBuffer(`${GRAPH_BASE}/drives/${oneDriveMatch.parentReference.driveId}/items/${oneDriveMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  const searchMatch = await findFileWithMicrosoftSearch(fileName);
+  if (searchMatch) {
+    try {
+      return await graphArrayBuffer(`${GRAPH_BASE}/drives/${searchMatch.parentReference.driveId}/items/${searchMatch.id}/content`);
+    } catch (error) {
+      if (!isLookupMiss(error)) throw error;
+    }
+  }
+
+  throw new GraphRequestError(await fileAccessMessage(driveId, path, fileName), 403);
 }
 
 async function findAccessibleDriveFile(path, fileName) {
@@ -127,7 +230,7 @@ async function findAccessibleDriveFile(path, fileName) {
   try {
     drives = (await graphJson(`${GRAPH_BASE}/me/drives?$select=id,name,driveType`)).value || [];
   } catch (error) {
-    if (isNotFound(error)) return null;
+    if (isLookupMiss(error)) return null;
     throw error;
   }
 
@@ -139,7 +242,7 @@ async function findAccessibleDriveFile(path, fileName) {
         return item;
       }
     } catch (error) {
-      if (!isNotFound(error)) throw error;
+      if (!isLookupMiss(error)) throw error;
     }
 
     const found = await findDriveFileByName(drive.id, fileName);
@@ -148,13 +251,52 @@ async function findAccessibleDriveFile(path, fileName) {
   return null;
 }
 
+async function findFileInDriveFolderByName(driveId, folderPath, fileName) {
+  if (!folderPath) return null;
+  const encodedPath = encodeURIComponent(folderPath).replaceAll("%2F", "/");
+  try {
+    const result = await graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$select=id,name,file,parentReference`);
+    return exactFileMatch(result.value, fileName);
+  } catch (error) {
+    if (isLookupMiss(error)) return null;
+    throw error;
+  }
+}
+
+async function fileAccessMessage(driveId, path, fileName) {
+  const folder = parentPath(path) || "root";
+  const names = await listDriveFolderFileNames(driveId, parentPath(path));
+  if (!names.length) {
+    return `No se pudo leer ${fileName}. No se pudo listar ningun archivo visible en ${folder}. Verifica permisos y ubicacion.`;
+  }
+  const visibleWorkbooks = names.filter((name) => /\.xlsx$/i.test(name));
+  const visibleText = visibleWorkbooks.length ? visibleWorkbooks.join(", ") : names.slice(0, 12).join(", ");
+  return `No se pudo leer ${fileName}. Archivos visibles en ${folder}: ${visibleText || "ninguno"}.`;
+}
+
+async function listDriveFolderFileNames(driveId, folderPath) {
+  if (!folderPath) return [];
+  const encodedPath = encodeURIComponent(folderPath).replaceAll("%2F", "/");
+  try {
+    const result = await graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$select=name,file`);
+    return (result.value || [])
+      .filter((item) => item.file)
+      .map((item) => item.name)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  } catch (error) {
+    if (isLookupMiss(error)) return [];
+    throw error;
+  }
+}
+
 async function findDriveFileByName(driveId, fileName) {
   const query = encodeURIComponent(String(fileName || "").replaceAll("'", "''"));
   try {
     const result = await graphJson(`${GRAPH_BASE}/drives/${driveId}/root/search(q='${query}')?$select=id,name,file,parentReference`);
     return exactFileMatch(result.value, fileName);
   } catch (error) {
-    if (isNotFound(error)) return null;
+    if (isLookupMiss(error)) return null;
     throw error;
   }
 }
@@ -165,7 +307,7 @@ async function findMyDriveFileByName(fileName) {
     const result = await graphJson(`${GRAPH_BASE}/me/drive/root/search(q='${query}')?$select=id,name,file,parentReference`);
     return exactFileMatch(result.value, fileName);
   } catch (error) {
-    if (isNotFound(error)) return null;
+    if (isLookupMiss(error)) return null;
     throw error;
   }
 }
@@ -190,9 +332,15 @@ async function findFileWithMicrosoftSearch(fileName) {
     )) || [];
     return exactFileMatch(hits.map((hit) => hit.resource), fileName);
   } catch (error) {
-    if (isNotFound(error)) return null;
+    if (isLookupMiss(error)) return null;
     throw error;
   }
+}
+
+function parentPath(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
 }
 
 function exactFileMatch(items, fileName) {

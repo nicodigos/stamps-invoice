@@ -11,7 +11,7 @@ import {
   EXPENSE_CATEGORIES,
   TEMPLATE_MONTHS,
 } from "./data.js";
-import { downloadSharePointTextFile, uploadSharePointFile } from "./graph.js";
+import { downloadSharePointFile, uploadSharePointFile } from "./graph.js";
 import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
@@ -28,7 +28,6 @@ import {
 
 const elements = {
   microsoftAuthBtn: $("#microsoft-auth-btn"),
-  connectCta: $("#connect-cta"),
   connectPanel: $("#connect-panel"),
   mainPanel: $("#main-panel"),
   stampForm: $("#stamp-form"),
@@ -84,7 +83,9 @@ let currentEmailPreviews = [];
 let emailPreviewRenderId = 0;
 let currentFolderTemplateText = "";
 let templateBankAccounts = [];
-const BANK_ACCOUNTS_CSV_PATH = "Cuentas Bancarias.csv";
+const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
+const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
+const TEMPLATE_ACCOUNT_TYPES = ["debit", "credit"];
 
 async function boot() {
   wireTabs();
@@ -112,13 +113,15 @@ function wireTabs() {
       button.classList.add("is-active");
       $(`#${button.dataset.tabTarget}`).classList.add("is-active");
       syncInvoiceReaderAuth();
+      if (button.dataset.tabTarget === "folder-template-tab") {
+        runGuarded(loadFolderTemplateCsv);
+      }
     });
   });
 }
 
 function wireButtons() {
   elements.microsoftAuthBtn.addEventListener("click", () => runGuarded(toggleMicrosoft));
-  elements.connectCta.addEventListener("click", () => runGuarded(connectMicrosoft));
   elements.invoiceFile.addEventListener("change", () => {
     addFilesToQueue(Array.from(elements.invoiceFile.files || []));
     elements.invoiceFile.value = "";
@@ -553,14 +556,23 @@ function renderFolderTemplate() {
   if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
 
   const month = elements.templateMonthInput.value;
+  if (!templateBankAccounts.length) {
+    currentFolderTemplateText = "";
+    elements.templateSourceOutput.textContent = "Load the bank accounts workbook before generating a folder template.";
+    elements.templateCountOutput.textContent = "0 folders";
+    elements.templatePathOutput.textContent = joinSharePointPath(companyRoot, String(year), month);
+    elements.folderTemplateTree.innerHTML = "";
+    return;
+  }
+
   const accounts = bankAccountsForCompany(company);
   const tree = buildFolderTemplateTree({ companyRoot, year, month, accounts });
   const folderCount = countFolderNodes(tree);
   currentFolderTemplateText = treeToText(tree);
 
-  elements.templateSourceOutput.textContent = templateBankAccounts.length
+  elements.templateSourceOutput.textContent = accounts.length
     ? `Bank accounts loaded: ${accounts.length} for this company.`
-    : "Bank accounts CSV has headers only or has not been loaded yet.";
+    : "Workbook loaded. No bank accounts found for this company; generating folders without bank subfolders.";
   elements.templateCountOutput.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
   elements.templatePathOutput.textContent = joinSharePointPath(companyRoot, String(year), month);
   elements.folderTemplateTree.innerHTML = renderTemplateNode(tree, true);
@@ -572,8 +584,7 @@ async function generateFolderTemplate() {
   elements.generateFolderTemplateBtn.querySelector("span").textContent = "Downloading";
   try {
     if (!window.JSZip) throw new Error("JSZip is not loaded.");
-    await loadCloudTemplateBankCsv();
-    renderFolderTemplate();
+    await loadFolderTemplateCsv();
     const fileName = buildFolderTemplateFileName();
     const blob = await folderTemplateToZip(buildCurrentMonthFolderTemplateTree());
     triggerBrowserDownload(blob, fileName);
@@ -582,6 +593,15 @@ async function generateFolderTemplate() {
     elements.generateFolderTemplateBtn.disabled = false;
     elements.generateFolderTemplateBtn.querySelector("span").textContent = "Download";
   }
+}
+
+async function loadFolderTemplateCsv() {
+  elements.templateSourceOutput.textContent = "Loading bank accounts workbook...";
+  elements.templateCountOutput.textContent = "0 folders";
+  elements.folderTemplateTree.innerHTML = "";
+  currentFolderTemplateText = "";
+  await loadCloudTemplateBankWorkbook();
+  renderFolderTemplate();
 }
 
 function buildFolderTemplateFileName() {
@@ -656,7 +676,7 @@ function buildFolderTemplateTree({ companyRoot, year, month, accounts }) {
 
 function buildDocumentsTemplate() {
   return {
-    name: "9 Documents",
+    name: "Documents",
     children: [
       {
         name: "Reimbursements",
@@ -681,7 +701,7 @@ function buildDocumentsTemplate() {
 
 function buildExpensesTemplate(accounts) {
   return {
-    name: "expenses",
+    name: "Expenses",
     children: EXPENSE_CATEGORIES.map((category) => ({
       name: category,
       children: accountTree(accounts),
@@ -691,11 +711,11 @@ function buildExpensesTemplate(accounts) {
 
 function buildIncomeTemplate(accounts) {
   return {
-    name: "income",
+    name: "Income",
     children: [
-      "invoices",
+      "Invoices",
       {
-        name: "transactions",
+        name: "Transactions",
         children: uniqueBankNodes(accounts),
       },
     ],
@@ -770,13 +790,20 @@ function treeToText(node, depth = 0) {
   return lines.join("\n");
 }
 
-async function loadCloudTemplateBankCsv() {
+async function loadCloudTemplateBankWorkbook() {
   try {
-    const text = await downloadSharePointTextFile(BANK_ACCOUNTS_CSV_PATH);
-    templateBankAccounts = parseBankAccountsCsv(text);
+    const bytes = await downloadSharePointFile(BANK_ACCOUNTS_WORKBOOK_PATH);
+    templateBankAccounts = parseBankAccountsWorkbook(bytes);
   } catch (error) {
     if (!isCsvNotFoundError(error)) throw error;
     templateBankAccounts = [];
+    renderFolderTemplate();
+    throw new Error(`Bank accounts workbook not found: ${BANK_ACCOUNTS_WORKBOOK_PATH}`);
+  }
+
+  if (!templateBankAccounts.length) {
+    renderFolderTemplate();
+    throw new Error(`Bank accounts workbook is empty or has no valid rows: ${BANK_ACCOUNTS_WORKBOOK_PATH}`);
   }
 }
 
@@ -784,8 +811,13 @@ function isCsvNotFoundError(error) {
   return /itemNotFound|could not be found|not found|no se encontro/i.test(error?.message || String(error));
 }
 
-function parseBankAccountsCsv(text) {
-  const rows = parseCsvRows(text);
+function parseBankAccountsWorkbook(bytes) {
+  if (!window.XLSX) throw new Error("XLSX is not loaded.");
+  const workbook = window.XLSX.read(bytes, { type: "array" });
+  const sheet = workbook.Sheets["Cuentas Bancarias"] || workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) return [];
+
+  const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
   if (rows.length < 2) return [];
   const headers = rows[0].map(normalizeCsvHeader);
   const indexes = {
@@ -794,16 +826,34 @@ function parseBankAccountsCsv(text) {
     type: headers.indexOf("tipo"),
     last4: headers.indexOf("ultimos 4 digitos"),
   };
-  if (indexes.bank < 0 || indexes.type < 0 || indexes.last4 < 0) {
-    throw new Error("CSV must include Banco, Tipo, and Ultimos 4 digitos columns.");
+  if (indexes.company < 0 || indexes.bank < 0 || indexes.type < 0 || indexes.last4 < 0) {
+    throw new Error("Workbook must include Empresa, Banco, Tipo, and Ultimos 4 digitos columns.");
   }
 
-  return rows.slice(1).map((row) => ({
-    company: indexes.company >= 0 ? String(row[indexes.company] || "").trim() : "",
-    bank: String(row[indexes.bank] || "").trim(),
-    type: String(row[indexes.type] || "").trim(),
-    last4: String(row[indexes.last4] || "").trim(),
-  })).filter((account) => account.bank && account.type);
+  return rows.slice(1).map((row, index) => {
+    const company = String(row[indexes.company] || "").trim();
+    const bank = String(row[indexes.bank] || "").trim();
+    const type = String(row[indexes.type] || "").trim();
+    const last4 = String(row[indexes.last4] || "").trim().toUpperCase();
+    if (company && !COMPANIES.includes(company)) {
+      throw new Error(`Invalid Empresa at workbook row ${index + 2}. Choose a company from the allowed list.`);
+    }
+    if (bank && !TEMPLATE_BANKS.includes(bank)) {
+      throw new Error(`Invalid Banco at workbook row ${index + 2}. Choose a bank from the allowed list.`);
+    }
+    if (type && !TEMPLATE_ACCOUNT_TYPES.includes(type)) {
+      throw new Error(`Invalid Tipo at workbook row ${index + 2}. Choose debit or credit.`);
+    }
+    if ((company || bank || type || last4) && !/^N\d{4}$/.test(last4)) {
+      throw new Error(`Invalid Ultimos 4 digitos at workbook row ${index + 2}. Expected NXXXX.`);
+    }
+    return {
+      company,
+      bank,
+      type,
+      last4,
+    };
+  }).filter((account) => account.bank && account.type && account.last4);
 }
 
 function bankAccountsForCompany(company) {
@@ -812,41 +862,7 @@ function bankAccountsForCompany(company) {
   const exactMatches = templateBankAccounts.filter((account) => normalizeCsvHeader(account.company) === normalizedCompany);
   if (exactMatches.length) return exactMatches;
   const genericAccounts = templateBankAccounts.filter((account) => !account.company);
-  return genericAccounts.length ? genericAccounts : templateBankAccounts;
-}
-
-function parseCsvRows(text) {
-  const rows = [];
-  let row = [];
-  let value = "";
-  let quoted = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (char === '"' && quoted && nextChar === '"') {
-      value += '"';
-      index += 1;
-    } else if (char === '"') {
-      quoted = !quoted;
-    } else if (char === "," && !quoted) {
-      row.push(value);
-      value = "";
-    } else if ((char === "\n" || char === "\r") && !quoted) {
-      if (char === "\r" && nextChar === "\n") index += 1;
-      row.push(value);
-      if (row.some((cell) => String(cell || "").trim())) rows.push(row);
-      row = [];
-      value = "";
-    } else {
-      value += char;
-    }
-  }
-
-  row.push(value);
-  if (row.some((cell) => String(cell || "").trim())) rows.push(row);
-  return rows;
+  return genericAccounts;
 }
 
 function normalizeCsvHeader(value) {
@@ -860,6 +876,9 @@ function normalizeCsvHeader(value) {
 
 async function copyFolderTemplate() {
   if (!currentFolderTemplateText) renderFolderTemplate();
+  if (!currentFolderTemplateText) {
+    throw new Error("Load the bank accounts workbook before copying a folder template.");
+  }
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(currentFolderTemplateText);
   } else {

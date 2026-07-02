@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Invoice Stamping</title>
+    <title>CNET Utilities</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
@@ -22,12 +22,12 @@
             <button id="invoice-show-filters-btn" class="show-filters-btn header-toggle" type="button" hidden aria-label="Show invoice filters">+</button>
           </div>
           <div class="hero-center">
-            <h1>Invoice Stamping</h1>
+            <h1>CNET Utilities</h1>
             <nav class="header-nav" aria-label="Sections">
               <button class="tab-button is-active" type="button" data-tab-target="stamp-tab">Stamp</button>
               <button class="tab-button" type="button" data-tab-target="downloader-tab">Invoice Downloader</button>
               <button class="tab-button" type="button" data-tab-target="folder-template-tab">Folder Template</button>
-              <button class="tab-button" type="button" data-tab-target="invoice-database-tab">Invoice DB</button>
+              <button class="tab-button" type="button" data-tab-target="invoice-database-tab">Processed receipts</button>
               <button class="tab-button" type="button" data-tab-target="invoice-upload-tab">Upload Receipts</button>
             </nav>
           </div>
@@ -257,7 +257,7 @@
             <aside id="invoice-filters-sidebar" class="sidebar-card">
               <div class="sidebar-header">
                 <h3>Filters</h3>
-                <button id="invoice-hide-filters-btn" class="sidebar-close-btn" type="button" aria-label="Hide filters">+</button>
+                <button id="invoice-hide-filters-btn" class="sidebar-close-btn" type="button" aria-label="Hide filters">&times;</button>
               </div>
               <div id="invoice-filters-accordion-panel" class="sidebar-accordion-panel is-open">
                 <div class="sidebar-accordion-content">
@@ -377,10 +377,9 @@
       </main>
 
       <section class="connect-panel" id="connect-panel">
-        <button class="auth-button auth-button-large" id="connect-cta" type="button">
-          <img src="./assets/img/microsoft-svgrepo-com.svg" alt="" aria-hidden="true">
-          <span>Connect Microsoft</span>
-        </button>
+        <p class="connect-message">
+          <span>Connect to Microsoft to start</span>
+        </p>
       </section>
     </div>
   </body>
