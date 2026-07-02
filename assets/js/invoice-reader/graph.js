@@ -19,7 +19,7 @@ class GraphRequestError extends Error {
 
 function authHeaders() {
   if (!state.graphToken) {
-    throw new Error("Microsoft no esta conectado.");
+    throw new Error("Microsoft is not connected.");
   }
   return { Authorization: `Bearer ${state.graphToken}` };
 }
@@ -83,7 +83,7 @@ export async function resolveDriveId() {
   const drives = (await graphJson(`${GRAPH_BASE}/sites/${site.id}/drives`)).value || [];
   const drive = drives.find((item) => item.name === spDriveName) || drives[0];
   if (!drive) {
-    throw new Error("No se pudo resolver el drive de SharePoint.");
+    throw new Error("Could not resolve the SharePoint drive.");
   }
   state.driveId = drive.id;
   return drive.id;
@@ -135,9 +135,9 @@ export async function loadDatabaseRows() {
       return { rows: [], eTag: null };
     }
     if (error instanceof GraphRequestError) {
-      throw new Error("No se pudo leer el CSV de SharePoint. Recarga antes de volver a guardar.");
+      throw new Error("Could not read the SharePoint CSV. Reload before saving again.");
     }
-    throw new Error("El CSV de SharePoint no se pudo parsear. Revisa el archivo antes de volver a guardar.");
+    throw new Error("The SharePoint CSV could not be parsed. Check the file before saving again.");
   }
 }
 
@@ -155,7 +155,7 @@ export async function saveDatabaseRows(rows, options = {}) {
     return item.eTag || null;
   } catch (error) {
     if (error instanceof GraphRequestError && (error.status === 409 || error.status === 412)) {
-      throw new Error("El CSV cambio en SharePoint desde tu ultima carga. Recarga la base antes de guardar para evitar sobreescribir cambios ajenos.");
+      throw new Error("The CSV changed in SharePoint since your last load. Reload the database before saving to avoid overwriting someone else's changes.");
     }
     throw error;
   }
@@ -187,7 +187,7 @@ async function runDailyCsvBackupCheck() {
       await writeBackupMarker(markerPath, new Date());
       return;
     }
-    throw new Error("No se pudo leer el CSV para generar la version diaria.");
+    throw new Error("Could not read the CSV to create the daily version.");
   }
 
   const backupFilePath = joinSharePointPath(backupDirPath, buildBackupFileName());
@@ -209,6 +209,8 @@ async function ensureBackupFolderExists(backupDirPath) {
   const children = await listChildrenByPath(parentPath);
   const folder = children.find((item) => item.folder && item.name === folderName);
   if (folder) return;
+  // Exception to the no-folder-creation rule: data_versions is internal app-owned backup storage.
+  // User/accounting folders must still be created manually; only this technical backup folder is auto-created.
   await createSharePointFolder(parentPath, folderName);
 }
 
@@ -224,7 +226,7 @@ async function readBackupMarker(path) {
     if (error instanceof GraphRequestError && error.status === 404) {
       return null;
     }
-    throw new Error("No se pudo leer el archivo de control de versiones del CSV.");
+    throw new Error("Could not read the CSV version control file.");
   }
 }
 

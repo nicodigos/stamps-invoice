@@ -19,7 +19,7 @@ exports.handler = async function handler(event) {
     const payload = JSON.parse(event.body || "{}");
     const accessToken = String(payload.accessToken || "").trim();
     if (!accessToken) {
-      return { statusCode: 401, body: "Falta el token de Microsoft." };
+      return { statusCode: 401, body: "Missing Microsoft token." };
     }
 
     const driveId = await resolveDriveId(accessToken);
@@ -73,14 +73,14 @@ async function resolveDriveId(token) {
   const spSitePath = process.env.SP_SITE_PATH || "";
   const spDriveName = process.env.SP_DRIVE_NAME || "Documents";
   if (!spHostname || !spSitePath) {
-    throw new Error("Falta SP_HOSTNAME o SP_SITE_PATH.");
+    throw new Error("Missing SP_HOSTNAME or SP_SITE_PATH.");
   }
 
   const site = await graphJson(`${GRAPH_BASE}/sites/${spHostname}:${spSitePath}`, token);
   const drives = (await graphJson(`${GRAPH_BASE}/sites/${site.id}/drives`, token)).value || [];
   const drive = drives.find((item) => item.name === spDriveName) || drives[0];
   if (!drive) {
-    throw new Error("No se pudo resolver el drive de SharePoint.");
+    throw new Error("Could not resolve the SharePoint drive.");
   }
   return drive.id;
 }
@@ -105,7 +105,7 @@ function requireXlsx() {
   try {
     return require("xlsx");
   } catch {
-    throw new Error("Falta la dependencia xlsx. Ejecuta npm install xlsx o agrega xlsx a package.json.");
+    throw new Error("Missing xlsx dependency. Run npm install xlsx or add xlsx to package.json.");
   }
 }
 
@@ -128,7 +128,7 @@ function columnValues(workbook, sheetName, headerName) {
   }
 
   if (headerColumn === -1) {
-    throw new Error(`No se encontro el header "${headerName}".`);
+    throw new Error(`Could not find the "${headerName}" header.`);
   }
 
   const seen = new Set();
@@ -145,7 +145,7 @@ function columnValues(workbook, sheetName, headerName) {
 function findSheet(workbook, sheetName) {
   const actualName = workbook.SheetNames.find((name) => normalize(name) === normalize(sheetName));
   if (!actualName) {
-    throw new Error(`No se encontro la hoja "${sheetName}".`);
+    throw new Error(`Could not find the "${sheetName}" sheet.`);
   }
   return workbook.Sheets[actualName];
 }
@@ -189,7 +189,7 @@ function parseMysqlConfig() {
   const password = process.env.DB_PASS || "";
   const database = (process.env.DB_NAME || "").trim();
   if (!host || !user || !password || !database) {
-    throw new Error("Faltan DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME.");
+    throw new Error("Missing DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME.");
   }
 
   const config = {

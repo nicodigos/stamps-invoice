@@ -27,7 +27,7 @@ export async function uploadedFileToPdfByteList(file) {
     const parsed = await parseEmailFile(file);
     return Promise.all(parsed.attachments.map((attachment) => fileContentToPdfBytes(attachment.bytes, attachment.name)));
   }
-  throw new Error(`Tipo de archivo no soportado: ${ext || file.type || "sin extension"}.`);
+  throw new Error(`Unsupported file type: ${ext || file.type || "no extension"}.`);
 }
 
 export async function fileToAnalysisPayload(file) {
@@ -103,7 +103,7 @@ export async function mergePdfBytes(pdfFilesBytes) {
   }
 
   if (output.getPageCount() === 0) {
-    throw new Error("No hay paginas para combinar.");
+    throw new Error("There are no pages to merge.");
   }
 
   return output.save();
@@ -305,7 +305,7 @@ async function imageBytesToPngPayload(bytes, ext) {
   canvas.height = bitmap.height;
   canvas.getContext("2d").drawImage(bitmap, 0, 0);
   const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!pngBlob) throw new Error("No se pudo preparar la imagen para AI.");
+  if (!pngBlob) throw new Error("Could not prepare the image for AI.");
   return {
     colorHint: detectBankColorHint(canvas),
     imageBase64: bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer())),
@@ -443,7 +443,7 @@ async function webpToPngBytes(bytes) {
   canvas.height = bitmap.height;
   canvas.getContext("2d").drawImage(bitmap, 0, 0);
   const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!pngBlob) throw new Error("No se pudo convertir la imagen WebP.");
+  if (!pngBlob) throw new Error("Could not convert the WebP image.");
   return new Uint8Array(await pngBlob.arrayBuffer());
 }
 

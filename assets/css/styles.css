@@ -1318,9 +1318,19 @@ pre {
 }
 
 .flash {
-  padding: 12px 14px;
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 80;
+  width: min(420px, calc(100vw - 36px));
+  padding: 13px 15px;
+  border: 0;
   border-radius: var(--radius);
+  box-shadow: 0 18px 42px rgba(28, 52, 72, 0.16);
   font-weight: 700;
+  line-height: 1.35;
+  transform: translateX(-50%);
+  animation: toast-in 180ms ease-out;
 }
 
 .flash.info {
@@ -1341,6 +1351,34 @@ pre {
 .flash.error {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.flash.is-leaving {
+  animation: toast-out 180ms ease-in forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
 }
 
 .result-panel {

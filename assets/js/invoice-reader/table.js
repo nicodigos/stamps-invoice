@@ -78,8 +78,8 @@ export function renderFilters(container) {
     group.innerHTML = `
       <label>${label}</label>
       <div class="date-filter-row">
-        <input id="filter-${key}-from" type="date" aria-label="${label} desde">
-        <input id="filter-${key}-to" type="date" aria-label="${label} hasta">
+        <input id="filter-${key}-from" type="date" aria-label="${label} from">
+        <input id="filter-${key}-to" type="date" aria-label="${label} to">
       </div>
     `;
     container.append(group);
@@ -101,8 +101,8 @@ export function renderFilters(container) {
         <span id="filter-${key}-max-label">${formatRangeValue(maxValue)}</span>
       </div>
       <div class="range-filter-row">
-        <input id="filter-${key}-min" type="range" min="${minValue}" max="${maxValue}" step="0.01" value="${minValue}" aria-label="${label} minimo">
-        <input id="filter-${key}-max" type="range" min="${minValue}" max="${maxValue}" step="0.01" value="${maxValue}" aria-label="${label} maximo">
+        <input id="filter-${key}-min" type="range" min="${minValue}" max="${maxValue}" step="0.01" value="${minValue}" aria-label="${label} minimum">
+        <input id="filter-${key}-max" type="range" min="${minValue}" max="${maxValue}" step="0.01" value="${maxValue}" aria-label="${label} maximum">
       </div>
     `;
     container.append(group);
@@ -203,7 +203,7 @@ function renderDatabaseTable(elements) {
         ${columns.map((column) => renderCell(column, row[column] ?? "")).join("")}
       </tr>
     `).join("")
-    : `<tr><td colspan="${columns.length}">No hay resultados para los filtros actuales.</td></tr>`;
+    : `<tr><td colspan="${columns.length}">No results match the current filters.</td></tr>`;
   updatePagination(elements, totalPages, shownCount, totalRows, startIndex);
 }
 
@@ -288,7 +288,7 @@ export function goToNextPage(elements) {
 
 export function downloadFilteredExcel() {
   if (!state.filteredRows.length) {
-    showFlash("No hay filas filtradas para exportar.", "warning");
+    showFlash("There are no filtered rows to export.", "warning");
     return;
   }
   const exportRows = state.filteredRows.map((row) => ({
@@ -304,7 +304,7 @@ export function downloadFilteredExcel() {
 export async function downloadFilteredPdfs() {
   const paths = state.filteredRows.map((row) => row.file_path).filter(Boolean);
   if (!paths.length) {
-    throw new Error("No hay PDFs filtrados para descargar.");
+    throw new Error("There are no filtered PDFs to download.");
   }
   const byteArrays = [];
   for (const path of paths) {
@@ -316,7 +316,7 @@ export async function downloadFilteredPdfs() {
     }
   }
   if (!byteArrays.length) {
-    throw new Error("No se pudo descargar ningun PDF filtrado.");
+    throw new Error("Could not download any filtered PDFs.");
   }
   const mergedBytes = await mergePdfBlobs(byteArrays);
   const blob = new Blob([mergedBytes], { type: "application/pdf" });

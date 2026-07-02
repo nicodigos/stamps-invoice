@@ -55,7 +55,7 @@ def build_workbook():
     for row_idx, account_type in enumerate(TYPES, start=1):
         lists.cell(row=row_idx, column=3, value=account_type)
 
-    headers = ["Empresa", "Banco", "Tipo", "Ultimos 4 digitos"]
+    headers = ["Company", "Bank", "Type", "Last 4 digits"]
     ws.append(headers)
     for row in ROWS:
         ws.append(row)

@@ -62,7 +62,7 @@ export function syncInvoiceReaderAuth() {
     state.filteredRows = [];
     elements.dbTableHead.innerHTML = "";
     elements.dbTableBody.innerHTML = "";
-    elements.pageIndicator.textContent = "Conecta Microsoft para cargar la base.";
+    elements.pageIndicator.textContent = "Connect Microsoft to load the database.";
     setFiltersSidebar(false);
   }
 }
@@ -115,7 +115,7 @@ function wireButtons() {
   elements.sidebarBackdrop.addEventListener("click", () => setFiltersSidebar(false));
   elements.saveDbBtn.addEventListener("click", async () => runGuarded(async () => {
     await saveDatabaseEdits();
-    showFlash("Cambios guardados en el CSV de SharePoint.");
+    showFlash("Changes saved to the SharePoint CSV.");
   }));
   elements.downloadExcelBtn.addEventListener("click", () => runGuarded(() => downloadFilteredExcel()));
   elements.downloadPdfsBtn.addEventListener("click", () => runGuarded(() => downloadFilteredPdfs()));
@@ -193,19 +193,19 @@ function syncReceiptTypeFields() {
 async function handleProcess() {
   clearFlash();
   elements.progressBar.value = 0;
-  elements.progressLabel.textContent = "Preparando procesamiento";
+  elements.progressLabel.textContent = "Preparing processing";
   const result = await processUploadedPdf(elements);
   renderSummary();
   elements.keepResultsBtn.disabled = !result.summaryRows.length;
   elements.dropResultsBtn.disabled = !result.summaryRows.length;
   elements.downloadSummaryBtn.disabled = !result.summaryRows.length;
   elements.uploadCaption.textContent = result.summaryRows.length
-    ? `Se procesaron ${result.summaryRows.length} pagina(s).`
-    : "No hubo paginas procesadas.";
+    ? `${result.summaryRows.length} page${result.summaryRows.length === 1 ? "" : "s"} processed.`
+    : "No pages were processed.";
   if (result.errors?.length) {
     showFlash(result.errors.join(" | "), "warning");
   } else {
-    showFlash("Todas las paginas fueron procesadas.");
+    showFlash("All pages were processed.");
   }
 }
 
@@ -213,7 +213,7 @@ async function handleKeepResults() {
   await keepProcessedResults();
   elements.keepResultsBtn.disabled = true;
   await refreshDatabase(elements);
-  showFlash("Resultados persistidos en SharePoint.");
+  showFlash("Results saved to SharePoint.");
 }
 
 function handleDropResults() {
@@ -224,8 +224,8 @@ function handleDropResults() {
   elements.keepResultsBtn.disabled = true;
   elements.dropResultsBtn.disabled = true;
   elements.downloadSummaryBtn.disabled = true;
-  elements.uploadCaption.textContent = "Resultados descartados.";
-  showFlash("Resultados descartados.");
+  elements.uploadCaption.textContent = "Results discarded.";
+  showFlash("Results discarded.");
 }
 
 function handleDownloadSummary() {
@@ -271,7 +271,7 @@ function renderSummary() {
 async function runGuarded(work) {
   try {
     syncInvoiceState(shellState);
-    if (!state.graphToken) throw new Error("Conecta Microsoft antes de usar Invoice App.");
+    if (!state.graphToken) throw new Error("Connect Microsoft before using Invoice App.");
     clearFlash();
     await work();
   } catch (error) {

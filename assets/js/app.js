@@ -11,7 +11,7 @@ import {
   EXPENSE_CATEGORIES,
   TEMPLATE_MONTHS,
 } from "./data.js";
-import { downloadSharePointFile, uploadSharePointFile } from "./graph.js";
+import { assertSharePointFolderPath, downloadSharePointFile, uploadSharePointFile } from "./graph.js";
 import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
@@ -501,13 +501,18 @@ async function processAndUploadInvoice() {
     });
 
     const fileName = buildStampedFileName({ paymentCode, clientInvoice, date });
-    const { bankTargetPath, categoryTargetPath } = buildTargetPaths({
+    const { bankTargetPath, categoryTargetPath, bankFolderPath, categoryFolderPath } = buildTargetPaths({
       company: elements.companyInput.value,
       bank: elements.bankInput.value,
       category: elements.categoryInput.value,
       date,
       fileName,
     });
+
+    // Critical rule: the stamping flow must NEVER create SharePoint folders.
+    // If a required folder is missing, stop here with a detailed error so the user can create it manually.
+    await assertSharePointFolderPath(bankFolderPath);
+    await assertSharePointFolderPath(categoryFolderPath);
 
     showFlash("Uploading combined PDF to SharePoint...", "info");
     await uploadSharePointFile(bankTargetPath, stampedBytes, "application/pdf");
@@ -543,9 +548,13 @@ function buildTargetPaths({ company, bank, category, date, fileName }) {
   if (!categoryRel) throw new Error(`Category has no mapping: ${category}`);
 
   const monthRoot = joinSharePointPath(companyRoot, String(date.getFullYear()), `${date.getMonth() + 1} ${monthName(date)}`);
+  const bankFolderPath = joinSharePointPath(monthRoot, "2 Bank Transactions", bankRel, "Direct Payments");
+  const categoryFolderPath = joinSharePointPath(monthRoot, ...categoryRel);
   return {
-    bankTargetPath: joinSharePointPath(monthRoot, "2 Bank Transactions", bankRel, "Direct Payments", fileName),
-    categoryTargetPath: joinSharePointPath(monthRoot, ...categoryRel, fileName),
+    bankFolderPath,
+    categoryFolderPath,
+    bankTargetPath: joinSharePointPath(bankFolderPath, fileName),
+    categoryTargetPath: joinSharePointPath(categoryFolderPath, fileName),
   };
 }
 
@@ -633,6 +642,7 @@ function buildCurrentMonthFolderTemplateTree() {
     children: [
       buildExpensesTemplate(accounts),
       buildIncomeTemplate(accounts),
+      buildStatementsTemplate(accounts),
       buildDocumentsTemplate(),
     ],
   };
@@ -668,6 +678,7 @@ function buildFolderTemplateTree({ companyRoot, year, month, accounts }) {
       children: [
         buildExpensesTemplate(accounts),
         buildIncomeTemplate(accounts),
+        buildStatementsTemplate(accounts),
         buildDocumentsTemplate(),
       ],
     }],
@@ -719,6 +730,13 @@ function buildIncomeTemplate(accounts) {
         children: uniqueBankNodes(accounts),
       },
     ],
+  };
+}
+
+function buildStatementsTemplate(accounts) {
+  return {
+    name: "Statements",
+    children: accountTree(accounts),
   };
 }
 
@@ -808,7 +826,7 @@ async function loadCloudTemplateBankWorkbook() {
 }
 
 function isCsvNotFoundError(error) {
-  return /itemNotFound|could not be found|not found|no se encontro/i.test(error?.message || String(error));
+  return /itemNotFound|could not be found|not found/i.test(error?.message || String(error));
 }
 
 function parseBankAccountsWorkbook(bytes) {
@@ -821,13 +839,13 @@ function parseBankAccountsWorkbook(bytes) {
   if (rows.length < 2) return [];
   const headers = rows[0].map(normalizeCsvHeader);
   const indexes = {
-    company: headers.indexOf("empresa"),
-    bank: headers.indexOf("banco"),
-    type: headers.indexOf("tipo"),
-    last4: headers.indexOf("ultimos 4 digitos"),
+    company: firstHeaderIndex(headers, ["company", "empresa"]),
+    bank: firstHeaderIndex(headers, ["bank", "banco"]),
+    type: firstHeaderIndex(headers, ["type", "tipo"]),
+    last4: firstHeaderIndex(headers, ["last 4 digits", "ultimos 4 digitos"]),
   };
   if (indexes.company < 0 || indexes.bank < 0 || indexes.type < 0 || indexes.last4 < 0) {
-    throw new Error("Workbook must include Empresa, Banco, Tipo, and Ultimos 4 digitos columns.");
+    throw new Error("Workbook must include Company, Bank, Type, and Last 4 digits columns.");
   }
 
   return rows.slice(1).map((row, index) => {
@@ -836,16 +854,16 @@ function parseBankAccountsWorkbook(bytes) {
     const type = String(row[indexes.type] || "").trim();
     const last4 = String(row[indexes.last4] || "").trim().toUpperCase();
     if (company && !COMPANIES.includes(company)) {
-      throw new Error(`Invalid Empresa at workbook row ${index + 2}. Choose a company from the allowed list.`);
+      throw new Error(`Invalid Company at workbook row ${index + 2}. Choose a company from the allowed list.`);
     }
     if (bank && !TEMPLATE_BANKS.includes(bank)) {
-      throw new Error(`Invalid Banco at workbook row ${index + 2}. Choose a bank from the allowed list.`);
+      throw new Error(`Invalid Bank at workbook row ${index + 2}. Choose a bank from the allowed list.`);
     }
     if (type && !TEMPLATE_ACCOUNT_TYPES.includes(type)) {
-      throw new Error(`Invalid Tipo at workbook row ${index + 2}. Choose debit or credit.`);
+      throw new Error(`Invalid Type at workbook row ${index + 2}. Choose debit or credit.`);
     }
     if ((company || bank || type || last4) && !/^N\d{4}$/.test(last4)) {
-      throw new Error(`Invalid Ultimos 4 digitos at workbook row ${index + 2}. Expected NXXXX.`);
+      throw new Error(`Invalid Last 4 digits at workbook row ${index + 2}. Expected NXXXX.`);
     }
     return {
       company,
@@ -854,6 +872,10 @@ function parseBankAccountsWorkbook(bytes) {
       last4,
     };
   }).filter((account) => account.bank && account.type && account.last4);
+}
+
+function firstHeaderIndex(headers, names) {
+  return names.map((name) => headers.indexOf(name)).find((index) => index >= 0) ?? -1;
 }
 
 function bankAccountsForCompany(company) {

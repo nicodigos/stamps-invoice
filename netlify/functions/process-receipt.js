@@ -48,7 +48,7 @@ const TAX_FIELD_TOKENS = {
   tps: ["TPS"],
   iva: ["IVA"],
   vat: ["VAT"],
-  retention: ["RETENTION", "RETENCION", "RETENCIÓN", "WITHHOLDING", "WH TAX"],
+  retention: ["RETENTION", "RETENCION", "WITHHOLDING", "WH TAX"],
 };
 
 exports.handler = async function handler(event) {
@@ -59,7 +59,7 @@ exports.handler = async function handler(event) {
   const openAiKey = process.env.OPENAI_API_KEY || "";
   const googleJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
   if (!openAiKey || !googleJson) {
-    return { statusCode: 500, body: "Falta OPENAI_API_KEY o GOOGLE_SERVICE_ACCOUNT_JSON." };
+    return { statusCode: 500, body: "Missing OPENAI_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON." };
   }
 
   let payload;
@@ -71,7 +71,7 @@ exports.handler = async function handler(event) {
   const imageBase64 = payload.imageBase64 || "";
   const receiptType = String(payload.receiptType || "bank_transaction").trim().toLowerCase();
   if (!imageBase64) {
-    return { statusCode: 400, body: "Falta imageBase64." };
+    return { statusCode: 400, body: "Missing imageBase64." };
   }
 
   try {
@@ -308,8 +308,8 @@ async function classifyWithGpt(vision, compact, receiptType, apiKey) {
   ].join(" ");
 
   const baseUserPrompt = [
-    "Esto viene de un invoice. Quiero que llenes estos campos: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, merchant_name, city, province, ticket_number.",
-    `El tipo de recibo elegido en el formulario es: ${receiptType}.`,
+    "This comes from an invoice. Fill these fields: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, merchant_name, city, province, ticket_number.",
+    `The receipt type selected in the form is: ${receiptType}.`,
     "Prefer OCR evidence. Even if uncertain, choose the best category from the allowed list instead of defaulting generically.",
     "Use Diverse Expenses only if the receipt genuinely does not fit any more specific allowed category.",
     "Map each specific tax into its own field: GST, HST, PST, QST/TVQ, TPS, IVA, VAT, retention/withholding. Leave missing fields as 0.",
@@ -350,7 +350,7 @@ function safeParseModelJson(content) {
   const sliced = tryParseJson(objectSlice);
   if (sliced) return sliced;
 
-  throw new Error(`No se pudo parsear JSON del modelo: ${text.slice(0, 160)}`);
+  throw new Error(`Could not parse model JSON: ${text.slice(0, 160)}`);
 }
 
 function tryParseJson(text) {

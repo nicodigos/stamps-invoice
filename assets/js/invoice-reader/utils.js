@@ -4,16 +4,26 @@ export function $(selector) {
 
 export function showFlash(message, type = "info") {
   const flash = $("#flash");
+  window.clearTimeout(window.__flashTimer);
+  window.clearTimeout(window.__flashHideTimer);
   flash.hidden = false;
   flash.className = `flash ${type}`;
   flash.textContent = message;
+  const timeout = type === "error" ? 7000 : type === "warning" ? 6000 : 4200;
+  window.__flashTimer = window.setTimeout(() => clearFlash(), timeout);
 }
 
 export function clearFlash() {
   const flash = $("#flash");
-  flash.hidden = true;
-  flash.textContent = "";
-  flash.className = "flash";
+  window.clearTimeout(window.__flashTimer);
+  window.clearTimeout(window.__flashHideTimer);
+  if (flash.hidden) return;
+  flash.classList.add("is-leaving");
+  window.__flashHideTimer = window.setTimeout(() => {
+    flash.hidden = true;
+    flash.textContent = "";
+    flash.className = "flash";
+  }, 180);
 }
 
 export function normalizeCardLast4(value) {

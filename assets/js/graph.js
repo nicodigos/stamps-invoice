@@ -12,7 +12,7 @@ class GraphRequestError extends Error {
 
 function authHeaders() {
   if (!state.graphToken) {
-    throw new Error("Microsoft no esta conectado.");
+    throw new Error("Microsoft is not connected.");
   }
   return { Authorization: `Bearer ${state.graphToken}` };
 }
@@ -70,14 +70,14 @@ export async function resolveDriveId() {
 
   const { spHostname, spSitePath, spDriveName } = state.config;
   if (!spHostname || !spSitePath) {
-    throw new Error("Falta SP_HOSTNAME o SP_SITE_PATH.");
+    throw new Error("Missing SP_HOSTNAME or SP_SITE_PATH.");
   }
 
   const site = await graphJson(`${GRAPH_BASE}/sites/${spHostname}:${spSitePath}`);
   const drives = (await graphJson(`${GRAPH_BASE}/sites/${site.id}/drives`)).value || [];
   const drive = drives.find((item) => item.name === spDriveName) || drives[0];
   if (!drive) {
-    throw new Error("No se pudo resolver el drive de SharePoint.");
+    throw new Error("Could not resolve the SharePoint drive.");
   }
   state.driveId = drive.id;
   return drive.id;
@@ -91,6 +91,30 @@ export async function uploadSharePointFile(path, content, contentType = "applica
     headers: { "Content-Type": contentType },
     body: content,
   });
+}
+
+export async function assertSharePointFolderPath(path) {
+  const driveId = await resolveDriveId();
+  const parts = String(path || "").split("/").filter(Boolean);
+  let currentPath = "";
+
+  for (const part of parts) {
+    const nextPath = currentPath ? `${currentPath}/${part}` : part;
+    const encodedPath = encodeURIComponent(nextPath).replaceAll("%2F", "/");
+    try {
+      const item = await graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}?$select=id,name,folder`);
+      if (!item.folder) {
+        throw new Error(`Expected a folder but found a file at: ${nextPath}`);
+      }
+      currentPath = nextPath;
+    } catch (error) {
+      if (isNotFound(error)) {
+        const stoppedAt = currentPath || "(drive root)";
+        throw new Error(`Missing SharePoint folder: ${nextPath}. Expected full folder path: ${path}. Last existing location: ${stoppedAt}. Create the missing folder manually before uploading.`);
+      }
+      throw error;
+    }
+  }
 }
 
 export async function downloadSharePointTextFile(path) {
@@ -267,11 +291,11 @@ async function fileAccessMessage(driveId, path, fileName) {
   const folder = parentPath(path) || "root";
   const names = await listDriveFolderFileNames(driveId, parentPath(path));
   if (!names.length) {
-    return `No se pudo leer ${fileName}. No se pudo listar ningun archivo visible en ${folder}. Verifica permisos y ubicacion.`;
+    return `Could not read ${fileName}. No visible files could be listed in ${folder}. Check permissions and location.`;
   }
   const visibleWorkbooks = names.filter((name) => /\.xlsx$/i.test(name));
   const visibleText = visibleWorkbooks.length ? visibleWorkbooks.join(", ") : names.slice(0, 12).join(", ");
-  return `No se pudo leer ${fileName}. Archivos visibles en ${folder}: ${visibleText || "ninguno"}.`;
+  return `Could not read ${fileName}. Visible files in ${folder}: ${visibleText || "none"}.`;
 }
 
 async function listDriveFolderFileNames(driveId, folderPath) {

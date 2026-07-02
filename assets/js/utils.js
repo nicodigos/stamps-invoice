@@ -2,15 +2,26 @@ export const $ = (selector) => document.querySelector(selector);
 
 export function showFlash(message, type = "info") {
   const flash = $("#flash");
+  window.clearTimeout(window.__flashTimer);
+  window.clearTimeout(window.__flashHideTimer);
   flash.textContent = message;
   flash.className = `flash ${type}`;
   flash.hidden = false;
+  const timeout = type === "error" ? 7000 : type === "warning" ? 6000 : 4200;
+  window.__flashTimer = window.setTimeout(() => clearFlash(), timeout);
 }
 
 export function clearFlash() {
   const flash = $("#flash");
-  flash.textContent = "";
-  flash.hidden = true;
+  window.clearTimeout(window.__flashTimer);
+  window.clearTimeout(window.__flashHideTimer);
+  if (flash.hidden) return;
+  flash.classList.add("is-leaving");
+  window.__flashHideTimer = window.setTimeout(() => {
+    flash.textContent = "";
+    flash.hidden = true;
+    flash.className = "flash";
+  }, 180);
 }
 
 export function escapeHtml(value) {

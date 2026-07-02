@@ -10,24 +10,24 @@ export async function processUploadedPdf(elements) {
   const receiptType = elements.receiptTypeInput.value;
   const isReimbursement = receiptType === "reimbursement";
   if (!state.graphToken) {
-    throw new Error("Microsoft es obligatorio para guardar PDFs y CSV.");
+    throw new Error("Microsoft is required to save PDFs and CSV data.");
   }
   if (!file) {
-    throw new Error("Selecciona un PDF.");
+    throw new Error("Select a PDF.");
   }
 
   const last4 = isReimbursement ? "" : normalizeCardLast4(elements.cardLast4Input.value);
   const description = isReimbursement ? elements.descriptionInput.value.trim() : "";
   if (!isReimbursement && !last4) {
-    throw new Error("Card last 4 digits debe tener exactamente 4 numeros.");
+    throw new Error("Card last 4 digits must contain exactly 4 numbers.");
   }
   if (isReimbursement && !description) {
-    throw new Error("La descripcion es obligatoria para reembolsos.");
+    throw new Error("Description is required for reimbursements.");
   }
 
   const pages = await splitPdfToPages(file);
   if (!pages.length) {
-    throw new Error("No se detectaron paginas en el PDF.");
+    throw new Error("No pages were detected in the PDF.");
   }
 
   const database = await loadDatabaseRows();
@@ -41,12 +41,12 @@ export async function processUploadedPdf(elements) {
   for (let index = 0; index < pages.length; index += 1) {
     const page = pages[index];
     elements.progressBar.value = Math.round(((index + 1) / pages.length) * 100);
-    elements.progressLabel.textContent = `Procesando pagina ${page.pageNumber} de ${pages.length}`;
+    elements.progressLabel.textContent = `Processing page ${page.pageNumber} of ${pages.length}`;
     const pdfSha256 = await sha256Hex(page.pdfBytes);
 
     const exactDuplicate = duplicateScopeRows.find((row) => row.pdf_sha256 && row.pdf_sha256 === pdfSha256);
     if (exactDuplicate) {
-      errors.push(`Pagina ${page.pageNumber}: omitida porque ya existe como ${exactDuplicate.file_name || "invoice previo"}.`);
+      errors.push(`Page ${page.pageNumber}: skipped because it already exists as ${exactDuplicate.file_name || "previous invoice"}.`);
       continue;
     }
 
@@ -58,13 +58,13 @@ export async function processUploadedPdf(elements) {
         receiptType,
       });
     } catch (error) {
-      errors.push(`Pagina ${page.pageNumber}: ${error.message}`);
+      errors.push(`Page ${page.pageNumber}: ${error.message}`);
       continue;
     }
 
     const baseName = buildSuggestedFileName(
       result.gpt.payment_date || result.compact.date,
-      isReimbursement ? "reembolso" : elements.bankInput.value,
+      isReimbursement ? "reimbursement" : elements.bankInput.value,
       isReimbursement ? "" : elements.cardTypeInput.value,
       result.gpt.merchant_name || result.compact.merchant,
       toFloat(result.gpt.total_amount, result.compact.total),
@@ -99,7 +99,7 @@ export async function processUploadedPdf(elements) {
 
     const logicalDuplicate = findDuplicateInvoice(row, duplicateScopeRows);
     if (logicalDuplicate) {
-      errors.push(`Pagina ${page.pageNumber}: posible duplicado omitido (${describeDuplicate(logicalDuplicate)}).`);
+      errors.push(`Page ${page.pageNumber}: skipped as a possible duplicate (${describeDuplicate(logicalDuplicate)}).`);
       continue;
     }
 
@@ -136,8 +136,8 @@ export async function processUploadedPdf(elements) {
     errors,
   };
   elements.progressLabel.textContent = errors.length
-    ? `Completado con ${errors.length} pagina(s) con error`
-    : "Procesamiento completo";
+    ? `Completed with ${errors.length} page error${errors.length === 1 ? "" : "s"}`
+    : "Processing complete";
   return state.processed;
 }
 
@@ -171,14 +171,14 @@ export async function keepProcessedResults() {
 
   for (const pending of state.processed.pendingUploads) {
     if (!pending.content?.byteLength) {
-      throw new Error(`No se guardo ningun PDF: ${pending.fileName} esta vacio. Vuelve a procesar el archivo antes de guardar.`);
+      throw new Error(`No PDFs were saved: ${pending.fileName} is empty. Process the file again before saving.`);
     }
   }
 
   for (const row of state.processed.summaryRows) {
     const duplicate = findDuplicateInvoice(row, duplicateScopeRows);
     if (duplicate) {
-      throw new Error(`No se guardo ningun PDF: ${row.file_name} parece duplicado de ${describeDuplicate(duplicate)}. Recarga y revisa la base.`);
+      throw new Error(`No PDFs were saved: ${row.file_name} appears to duplicate ${describeDuplicate(duplicate)}. Reload and review the database.`);
     }
     duplicateScopeRows.push(row);
   }
@@ -191,16 +191,16 @@ export async function keepProcessedResults() {
         uploadedItems.push(uploaded);
       }
       if (uploaded?.size === 0) {
-        throw new Error(`${pending.fileName} llego a SharePoint con peso 0.`);
+        throw new Error(`${pending.fileName} reached SharePoint with 0 bytes.`);
       }
     }
   } catch (error) {
     try {
       await rollbackUploadedItems(uploadedItems);
     } catch (rollbackError) {
-      throw new Error(`El lote fallo y el CSV no fue actualizado: ${error.message} ${rollbackError.message}`);
+      throw new Error(`The batch failed and the CSV was not updated: ${error.message} ${rollbackError.message}`);
     }
-    throw new Error(`No se guardo ningun PDF ni se actualizo el CSV: ${error.message}`);
+    throw new Error(`No PDFs were saved and the CSV was not updated: ${error.message}`);
   }
 
   await saveDatabaseRows([...database.rows, ...state.processed.summaryRows], { expectedEtag: database.eTag });
@@ -223,7 +223,7 @@ async function rollbackUploadedItems(items) {
     }
   }
   if (failures.length) {
-    throw new Error(`No se pudo deshacer la subida de: ${failures.join(", ")}.`);
+    throw new Error(`Could not roll back the upload for: ${failures.join(", ")}.`);
   }
 }
 
