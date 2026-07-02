@@ -9,6 +9,7 @@ export const COMPANIES = [
   "16021166 Canada Inc-Diego-Chacho",
   "9359-6633 QUEBEC INC",
   "9390-9216 QUEBEC INC",
+  "TAYANTI-CANADA",
 ];
 
 export const BANKS = ["National Bank", "Scotia Bank", "Desjardins"];
@@ -41,6 +42,7 @@ export const COMPANY_SHAREPOINT_DIRS = {
   "16021166 Canada Inc-Diego-Chacho": "General/16021166 Canada Inc-Diego-Chacho/Documents Accountant",
   "9359-6633 QUEBEC INC": "General/9359-6633 QUEBEC INC/02-Document Accountant",
   "9390-9216 QUEBEC INC": "General/9390-9216 QUEBEC INC/02-Documents accountant 9390-9216",
+  "TAYANTI-CANADA": "General/TAYANTI-CANADA/01-Documents Accountant Tayanti",
 };
 
 export const BANK_TO_CHECKINGS_DIR = {
@@ -65,3 +67,53 @@ export const CATEGORY_TO_MONTH_REL_PATH = {
   "9 Reimbursements - OP": ["9 Reimbursements", "OP"],
   "9 Reimbursements - Reimbursements": ["9 Reimbursements", "Reimbursements"],
 };
+
+export const TEMPLATE_MONTHS = [
+  "1 January",
+  "2 February",
+  "3 March",
+  "4 April",
+  "5 May",
+  "6 June",
+  "7 July",
+  "8 August",
+  "9 September",
+  "10 October",
+  "11 November",
+  "12 December",
+];
+
+export const EXPENSE_CATEGORIES = [
+  "2261 Visa Affaires - Eduardo",
+  "2305 Visa Affaires - Gonzalo",
+  "2450 Group Insurance Payable",
+  "2600 GSTHST Payable",
+  "2610 GST-QST Payable",
+  "5000 Cleaning Supplies",
+  "5010 Subcontractors",
+  "5011 Cleaning Equipment",
+  "5012 Equipment Repairs and parts",
+  "5200 Salaries and Wages",
+  "5215 Insurance - Employee Benefits",
+  "5300 WSIB Expense",
+  "6050 Advertising",
+  "6052 Gifts and Promotions",
+  "6100 CNET - Franchise Costs",
+  "6101 CNET - Franchise and Royalty Fees",
+  "6103 CNET - Advertising Fees",
+  "6105 CNET - Franchise Brokerage Fees",
+  "6200 Computer and Internet Expenses",
+  "6240 Equipment Rental Expense",
+  "6350 Office expenses",
+  "6351 Rent or lease payments",
+  "6355 Utilities",
+  "6400 Insurance",
+  "6430 Meals and entertainment",
+  "6500 Management Fees",
+  "6650 Legal and professional fees",
+  "6700 Interest expense",
+  "6860 Vehicle Expense",
+  "6890 Parking Expense",
+  "QST Payable",
+  "QST Suspense",
+];

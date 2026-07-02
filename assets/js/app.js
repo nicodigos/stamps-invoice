@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.js";
+import { initInvoiceReader, syncInvoiceReaderAuth } from "./invoice-reader/index.js";
 import { state } from "./state.js";
 import {
   BANKS,
@@ -7,8 +8,10 @@ import {
   CATEGORY_TO_MONTH_REL_PATH,
   COMPANIES,
   COMPANY_SHAREPOINT_DIRS,
+  EXPENSE_CATEGORIES,
+  TEMPLATE_MONTHS,
 } from "./data.js";
-import { uploadSharePointFile } from "./graph.js";
+import { downloadSharePointTextFile, uploadSharePointFile } from "./graph.js";
 import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
@@ -62,6 +65,15 @@ const elements = {
   fileTreeSearch: $("#file-tree-search"),
   fileTreeTotal: $("#file-tree-total"),
   fileTree: $("#file-tree"),
+  templateCompanyInput: $("#template-company-input"),
+  templateYearInput: $("#template-year-input"),
+  templateMonthInput: $("#template-month-input"),
+  generateFolderTemplateBtn: $("#generate-folder-template-btn"),
+  copyFolderTemplateBtn: $("#copy-folder-template-btn"),
+  templateSourceOutput: $("#template-source-output"),
+  templateCountOutput: $("#template-count-output"),
+  templatePathOutput: $("#template-path-output"),
+  folderTemplateTree: $("#folder-template-tree"),
 };
 
 boot().catch((error) => showFlash(error.message, "error"));
@@ -70,6 +82,9 @@ let queuedFiles = [];
 let currentFileTreeResult = null;
 let currentEmailPreviews = [];
 let emailPreviewRenderId = 0;
+let currentFolderTemplateText = "";
+let templateBankAccounts = [];
+const BANK_ACCOUNTS_CSV_PATH = "Cuentas Bancarias.csv";
 
 async function boot() {
   wireTabs();
@@ -78,9 +93,14 @@ async function boot() {
   populateSelect(elements.companyInput, COMPANIES);
   populateSelect(elements.bankInput, BANKS);
   populateSelect(elements.categoryInput, CATEGORIES);
+  populateSelect(elements.templateCompanyInput, COMPANIES);
   elements.dateInput.value = new Date().toISOString().slice(0, 10);
+  elements.templateYearInput.value = String(new Date().getFullYear());
+  elements.templateMonthInput.value = TEMPLATE_MONTHS[new Date().getMonth()];
+  renderFolderTemplate();
   await completeMicrosoftRedirectIfNeeded();
   renderAuthState();
+  await initInvoiceReader();
   window.lucide?.createIcons();
 }
 
@@ -91,6 +111,7 @@ function wireTabs() {
       document.querySelectorAll(".tab-panel").forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
       $(`#${button.dataset.tabTarget}`).classList.add("is-active");
+      syncInvoiceReaderAuth();
     });
   });
 }
@@ -136,6 +157,11 @@ function wireButtons() {
   elements.autofillBtn.addEventListener("click", () => runGuarded(autoFillFromQueuedFiles));
   elements.invoiceDownloadBtn.addEventListener("click", () => runGuarded(downloadCnetInvoices));
   elements.refreshFileTreeBtn.addEventListener("click", () => runGuarded(refreshFileTree));
+  elements.generateFolderTemplateBtn.addEventListener("click", () => runGuarded(generateFolderTemplate));
+  elements.copyFolderTemplateBtn.addEventListener("click", () => runGuarded(copyFolderTemplate));
+  elements.templateCompanyInput.addEventListener("change", renderFolderTemplate);
+  elements.templateYearInput.addEventListener("change", renderFolderTemplate);
+  elements.templateMonthInput.addEventListener("change", renderFolderTemplate);
   elements.fileTreeSearch.addEventListener("input", () => renderFileTree(currentFileTreeResult));
   elements.fileTree.addEventListener("click", (event) => {
     const fileButton = event.target.closest(".file-download");
@@ -427,6 +453,7 @@ function disconnectMicrosoft() {
   state.driveId = "";
   sessionStorage.removeItem("graphToken");
   renderAuthState();
+  syncInvoiceReaderAuth();
   showFlash("Microsoft disconnected.", "info");
 }
 
@@ -435,6 +462,7 @@ function renderAuthState() {
   elements.microsoftAuthBtn.querySelector("span").textContent = connected ? "Disconnect" : "Connect";
   elements.mainPanel.hidden = !connected;
   elements.connectPanel.hidden = connected;
+  syncInvoiceReaderAuth();
   window.lucide?.createIcons();
 }
 
@@ -516,6 +544,336 @@ function buildTargetPaths({ company, bank, category, date, fileName }) {
     bankTargetPath: joinSharePointPath(monthRoot, "2 Bank Transactions", bankRel, "Direct Payments", fileName),
     categoryTargetPath: joinSharePointPath(monthRoot, ...categoryRel, fileName),
   };
+}
+
+function renderFolderTemplate() {
+  const company = elements.templateCompanyInput.value;
+  const year = Number(elements.templateYearInput.value) || new Date().getFullYear();
+  const companyRoot = COMPANY_SHAREPOINT_DIRS[company];
+  if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
+
+  const month = elements.templateMonthInput.value;
+  const accounts = bankAccountsForCompany(company);
+  const tree = buildFolderTemplateTree({ companyRoot, year, month, accounts });
+  const folderCount = countFolderNodes(tree);
+  currentFolderTemplateText = treeToText(tree);
+
+  elements.templateSourceOutput.textContent = templateBankAccounts.length
+    ? `Bank accounts loaded: ${accounts.length} for this company.`
+    : "Bank accounts CSV has headers only or has not been loaded yet.";
+  elements.templateCountOutput.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
+  elements.templatePathOutput.textContent = joinSharePointPath(companyRoot, String(year), month);
+  elements.folderTemplateTree.innerHTML = renderTemplateNode(tree, true);
+  window.lucide?.createIcons();
+}
+
+async function generateFolderTemplate() {
+  elements.generateFolderTemplateBtn.disabled = true;
+  elements.generateFolderTemplateBtn.querySelector("span").textContent = "Downloading";
+  try {
+    if (!window.JSZip) throw new Error("JSZip is not loaded.");
+    await loadCloudTemplateBankCsv();
+    renderFolderTemplate();
+    const fileName = buildFolderTemplateFileName();
+    const blob = await folderTemplateToZip(buildCurrentMonthFolderTemplateTree());
+    triggerBrowserDownload(blob, fileName);
+    showFlash(`Folder ZIP downloaded: ${fileName}`, "success");
+  } finally {
+    elements.generateFolderTemplateBtn.disabled = false;
+    elements.generateFolderTemplateBtn.querySelector("span").textContent = "Download";
+  }
+}
+
+function buildFolderTemplateFileName() {
+  const company = elements.templateCompanyInput.value;
+  const year = Number(elements.templateYearInput.value) || new Date().getFullYear();
+  const month = elements.templateMonthInput.value;
+  return `${sanitizeFilename(company, "company")}_${year}_${sanitizeFilename(month, "month")}_folders.zip`;
+}
+
+function buildCurrentFolderTemplateTree() {
+  const company = elements.templateCompanyInput.value;
+  const year = Number(elements.templateYearInput.value) || new Date().getFullYear();
+  const companyRoot = COMPANY_SHAREPOINT_DIRS[company];
+  if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
+  return buildFolderTemplateTree({
+    companyRoot,
+    year,
+    month: elements.templateMonthInput.value,
+    accounts: bankAccountsForCompany(company),
+  });
+}
+
+function buildCurrentMonthFolderTemplateTree() {
+  const company = elements.templateCompanyInput.value;
+  const month = elements.templateMonthInput.value;
+  const accounts = bankAccountsForCompany(company);
+  return {
+    name: month,
+    children: [
+      buildExpensesTemplate(accounts),
+      buildIncomeTemplate(accounts),
+      buildDocumentsTemplate(),
+    ],
+  };
+}
+
+async function folderTemplateToZip(tree) {
+  const zip = new window.JSZip();
+  addFolderTreeToZip(zip, tree);
+  return zip.generateAsync({ type: "blob" });
+}
+
+function addFolderTreeToZip(zip, node, path = "") {
+  const name = typeof node === "string" ? node : node.name;
+  const nextPath = joinSharePointPath(path, sanitizeZipPathPart(name));
+  zip.folder(nextPath);
+  for (const child of (typeof node === "string" ? [] : node.children || [])) {
+    addFolderTreeToZip(zip, child, nextPath);
+  }
+}
+
+function sanitizeZipPathPart(value) {
+  return String(value || "folder")
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "folder";
+}
+
+function buildFolderTemplateTree({ companyRoot, year, month, accounts }) {
+  return {
+    name: joinSharePointPath(companyRoot, String(year)),
+    children: [{
+      name: month,
+      children: [
+        buildExpensesTemplate(accounts),
+        buildIncomeTemplate(accounts),
+        buildDocumentsTemplate(),
+      ],
+    }],
+  };
+}
+
+function buildDocumentsTemplate() {
+  return {
+    name: "9 Documents",
+    children: [
+      {
+        name: "Reimbursements",
+        children: ["OP", "Reimbursements"],
+      },
+      {
+        name: "Tax Remittances",
+        children: ["GST HST", "Payroll Remittances", "QST"],
+      },
+      {
+        name: "Work Safety",
+        children: ["CNESST QC", "WCB NB", "WCB NS", "WCB PEI", "WSIB ON"],
+      },
+      "Comite Paritario",
+      "Investment Land",
+      "Letters Received",
+      "Union",
+      "Xoom Investment",
+    ],
+  };
+}
+
+function buildExpensesTemplate(accounts) {
+  return {
+    name: "expenses",
+    children: EXPENSE_CATEGORIES.map((category) => ({
+      name: category,
+      children: accountTree(accounts),
+    })),
+  };
+}
+
+function buildIncomeTemplate(accounts) {
+  return {
+    name: "income",
+    children: [
+      "invoices",
+      {
+        name: "transactions",
+        children: uniqueBankNodes(accounts),
+      },
+    ],
+  };
+}
+
+function accountTree(accounts) {
+  const grouped = new Map();
+  for (const account of accounts) {
+    if (!grouped.has(account.bank)) grouped.set(account.bank, new Map());
+    const typeMap = grouped.get(account.bank);
+    if (!typeMap.has(account.type)) typeMap.set(account.type, []);
+    typeMap.get(account.type).push(account.last4);
+  }
+
+  return Array.from(grouped.entries())
+    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+    .map(([bank, typeMap]) => ({
+      name: bank,
+      children: Array.from(typeMap.entries())
+        .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+        .map(([type, last4List]) => ({
+          name: type,
+          children: Array.from(new Set(last4List.filter(Boolean))).sort().map((last4) => ({ name: last4, children: [] })),
+        })),
+    }));
+}
+
+function uniqueBankNodes(accounts) {
+  const banks = Array.from(new Set(accounts.map((account) => account.bank).filter(Boolean))).sort((left, right) => (
+    left.localeCompare(right, undefined, { numeric: true })
+  ));
+  return banks;
+}
+
+function renderTemplateNode(node, isRoot = false) {
+  if (typeof node === "string") {
+    return `<div class="template-leaf"><i data-lucide="folder"></i><span>${escapeHtml(node)}</span></div>`;
+  }
+  const children = node.children || [];
+  if (!children.length) {
+    return `<div class="template-leaf"><i data-lucide="folder"></i><span>${escapeHtml(node.name)}</span></div>`;
+  }
+  return `
+    <details class="tree-node template-node" ${isRoot ? "open" : ""}>
+      <summary>
+        <span class="tree-label">${escapeHtml(node.name)}</span>
+        <span class="tree-count">${countFolderNodes(node)}</span>
+      </summary>
+      <div class="tree-children">
+        ${children.map((child) => renderTemplateNode(child)).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function countFolderNodes(node) {
+  if (typeof node === "string") return 1;
+  return 1 + (node.children || []).reduce((total, child) => total + countFolderNodes(child), 0);
+}
+
+function treeToText(node, depth = 0) {
+  if (typeof node === "string") {
+    const leafPrefix = depth ? `${"  ".repeat(depth - 1)}- ` : "";
+    return `${leafPrefix}${node}`;
+  }
+  const prefix = depth ? `${"  ".repeat(depth - 1)}- ` : "";
+  const lines = [`${prefix}${node.name}`];
+  for (const child of node.children || []) {
+    lines.push(treeToText(child, depth + 1));
+  }
+  return lines.join("\n");
+}
+
+async function loadCloudTemplateBankCsv() {
+  try {
+    const text = await downloadSharePointTextFile(BANK_ACCOUNTS_CSV_PATH);
+    templateBankAccounts = parseBankAccountsCsv(text);
+  } catch (error) {
+    if (!isCsvNotFoundError(error)) throw error;
+    templateBankAccounts = [];
+  }
+}
+
+function isCsvNotFoundError(error) {
+  return /itemNotFound|could not be found|not found|no se encontro/i.test(error?.message || String(error));
+}
+
+function parseBankAccountsCsv(text) {
+  const rows = parseCsvRows(text);
+  if (rows.length < 2) return [];
+  const headers = rows[0].map(normalizeCsvHeader);
+  const indexes = {
+    company: headers.indexOf("empresa"),
+    bank: headers.indexOf("banco"),
+    type: headers.indexOf("tipo"),
+    last4: headers.indexOf("ultimos 4 digitos"),
+  };
+  if (indexes.bank < 0 || indexes.type < 0 || indexes.last4 < 0) {
+    throw new Error("CSV must include Banco, Tipo, and Ultimos 4 digitos columns.");
+  }
+
+  return rows.slice(1).map((row) => ({
+    company: indexes.company >= 0 ? String(row[indexes.company] || "").trim() : "",
+    bank: String(row[indexes.bank] || "").trim(),
+    type: String(row[indexes.type] || "").trim(),
+    last4: String(row[indexes.last4] || "").trim(),
+  })).filter((account) => account.bank && account.type);
+}
+
+function bankAccountsForCompany(company) {
+  if (!templateBankAccounts.length) return [];
+  const normalizedCompany = normalizeCsvHeader(company);
+  const exactMatches = templateBankAccounts.filter((account) => normalizeCsvHeader(account.company) === normalizedCompany);
+  if (exactMatches.length) return exactMatches;
+  const genericAccounts = templateBankAccounts.filter((account) => !account.company);
+  return genericAccounts.length ? genericAccounts : templateBankAccounts;
+}
+
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === '"' && quoted && nextChar === '"') {
+      value += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && nextChar === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => String(cell || "").trim())) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+
+  row.push(value);
+  if (row.some((cell) => String(cell || "").trim())) rows.push(row);
+  return rows;
+}
+
+function normalizeCsvHeader(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function copyFolderTemplate() {
+  if (!currentFolderTemplateText) renderFolderTemplate();
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(currentFolderTemplateText);
+  } else {
+    const textArea = document.createElement("textarea");
+    textArea.value = currentFolderTemplateText;
+    textArea.setAttribute("readonly", "");
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand("copy");
+    textArea.remove();
+  }
+  showFlash("Folder template copied to clipboard.", "success");
 }
 
 async function downloadCnetInvoices() {

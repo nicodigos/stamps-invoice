@@ -18,12 +18,17 @@
     <div class="app-shell">
       <header class="hero">
         <div class="hero-top">
-          <div class="hero-side hero-side-left"></div>
+          <div class="hero-side hero-side-left">
+            <button id="invoice-show-filters-btn" class="show-filters-btn header-toggle" type="button" hidden aria-label="Show invoice filters">+</button>
+          </div>
           <div class="hero-center">
             <h1>Invoice Stamping</h1>
             <nav class="header-nav" aria-label="Sections">
               <button class="tab-button is-active" type="button" data-tab-target="stamp-tab">Stamp</button>
               <button class="tab-button" type="button" data-tab-target="downloader-tab">Invoice Downloader</button>
+              <button class="tab-button" type="button" data-tab-target="folder-template-tab">Folder Template</button>
+              <button class="tab-button" type="button" data-tab-target="invoice-database-tab">Invoice DB</button>
+              <button class="tab-button" type="button" data-tab-target="invoice-upload-tab">Upload Receipts</button>
             </nav>
           </div>
           <div class="hero-side hero-side-right">
@@ -174,6 +179,200 @@
               </section>
             </div>
           </div>
+        </section>
+
+        <section class="tab-panel" id="folder-template-tab">
+          <div class="work-surface">
+            <div class="section-heading">
+              <h2>Folder Template</h2>
+              <div class="toolbar">
+                <button class="btn" id="copy-folder-template-btn" type="button">
+                  <i data-lucide="copy"></i>
+                  <span>Copy tree</span>
+                </button>
+                <button class="btn btn-primary" id="generate-folder-template-btn" type="button">
+                  <i data-lucide="folder-tree"></i>
+                  <span>Download</span>
+                </button>
+              </div>
+            </div>
+            <div class="template-body">
+              <label class="field">
+                <span>Company</span>
+                <select id="template-company-input"></select>
+              </label>
+              <label class="field">
+                <span>Year</span>
+                <input id="template-year-input" type="number" min="2000" max="2100" step="1">
+              </label>
+              <label class="field">
+                <span>Month</span>
+                <select id="template-month-input">
+                  <option value="1 January">1 January</option>
+                  <option value="2 February">2 February</option>
+                  <option value="3 March">3 March</option>
+                  <option value="4 April">4 April</option>
+                  <option value="5 May">5 May</option>
+                  <option value="6 June">6 June</option>
+                  <option value="7 July">7 July</option>
+                  <option value="8 August">8 August</option>
+                  <option value="9 September">9 September</option>
+                  <option value="10 October">10 October</option>
+                  <option value="11 November">11 November</option>
+                  <option value="12 December">12 December</option>
+                </select>
+              </label>
+              <div class="template-summary">
+                <span id="template-source-output">Template source: accountant folders found in OneDrive.</span>
+                <strong id="template-count-output">0 folders</strong>
+              </div>
+              <section class="folder-template-preview">
+                <div class="file-explorer-header">
+                  <div>
+                    <h3>Generated Tree</h3>
+                    <span id="template-path-output">Choose a company and generate a template.</span>
+                  </div>
+                </div>
+                <div class="template-tree" id="folder-template-tree"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="invoice-database-tab">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">SharePoint</p>
+              <h2>Processed receipts</h2>
+            </div>
+            <div class="toolbar">
+              <button id="invoice-refresh-db-btn" class="btn" type="button">Refresh</button>
+              <button id="invoice-save-db-btn" class="btn btn-primary" type="button">Save status</button>
+              <button id="invoice-download-excel-btn" class="btn" type="button">Download Excel</button>
+              <button id="invoice-download-pdfs-btn" class="btn" type="button">Download PDFs</button>
+            </div>
+          </div>
+
+          <div id="invoice-database-layout" class="layout-grid sidebar-overlay-layout is-collapsed">
+            <aside id="invoice-filters-sidebar" class="sidebar-card">
+              <div class="sidebar-header">
+                <h3>Filters</h3>
+                <button id="invoice-hide-filters-btn" class="sidebar-close-btn" type="button" aria-label="Hide filters">+</button>
+              </div>
+              <div id="invoice-filters-accordion-panel" class="sidebar-accordion-panel is-open">
+                <div class="sidebar-accordion-content">
+                  <div class="sidebar-title-row">
+                    <button id="invoice-clear-filters-btn" class="text-button" type="button">Clear</button>
+                  </div>
+                  <div id="invoice-filters-container" class="filter-stack"></div>
+                </div>
+              </div>
+            </aside>
+            <button id="invoice-sidebar-backdrop" class="sidebar-backdrop" type="button" hidden aria-label="Close filters"></button>
+
+            <div class="table-area">
+              <div class="db-table-shell">
+                <div class="pagination-bar">
+                  <button id="invoice-prev-page-btn" class="btn" type="button">Prev</button>
+                  <span id="invoice-page-indicator" class="page-indicator">Connect Microsoft to load the database.</span>
+                  <button id="invoice-next-page-btn" class="btn" type="button">Next</button>
+                </div>
+                <div class="table-wrap db-table-scroll">
+                  <table id="invoice-db-table" class="db-table">
+                    <thead></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="invoice-upload-tab">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">OCR + GPT</p>
+              <h2>Process new receipts</h2>
+            </div>
+            <div class="toolbar">
+              <button id="invoice-process-btn" class="btn btn-primary" type="button">Process PDF</button>
+              <button id="invoice-keep-results-btn" class="btn btn-primary" type="button" disabled>Keep Results</button>
+              <button id="invoice-drop-results-btn" class="btn" type="button" disabled>Drop Results</button>
+              <button id="invoice-download-summary-btn" class="btn" type="button" disabled>Download summary</button>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>Receipt type</span>
+              <select id="invoice-receipt-type-input">
+                <option value="bank_transaction">Bank transaction</option>
+                <option value="reimbursement">Reimbursement</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>PDF</span>
+              <input id="invoice-pdf-input" type="file" accept=".pdf,application/pdf">
+            </label>
+
+            <label class="field">
+              <span>Company</span>
+              <select id="invoice-company-input"></select>
+            </label>
+
+            <label class="field" id="invoice-bank-field">
+              <span>Bank</span>
+              <select id="invoice-bank-input"></select>
+              <small class="field-hint">Only applies to bank transactions.</small>
+            </label>
+
+            <label class="field" id="invoice-card-type-field">
+              <span>Card type</span>
+              <select id="invoice-card-type-input">
+                <option value="debit">debit</option>
+                <option value="credit">credit</option>
+              </select>
+              <small class="field-hint">Only applies to bank transactions.</small>
+            </label>
+
+            <label class="field" id="invoice-card-last4-field">
+              <span>Card last 4</span>
+              <input id="invoice-card-last4-input" type="text" inputmode="numeric" maxlength="4" placeholder="1234">
+              <small class="field-hint">Required for bank transactions.</small>
+            </label>
+
+            <label class="field field-wide" id="invoice-description-field">
+              <span>Description</span>
+              <textarea id="invoice-description-input" rows="3" placeholder="Free text applied to all pages"></textarea>
+              <small class="field-hint">Required for reimbursements.</small>
+            </label>
+          </div>
+
+          <div class="progress-card">
+            <div class="progress-row">
+              <span>Progress</span>
+              <span id="invoice-progress-label">Waiting for PDF</span>
+            </div>
+            <progress id="invoice-progress-bar" value="0" max="100"></progress>
+          </div>
+
+          <div class="content-card">
+            <div class="results-meta">
+              <p id="invoice-upload-caption">Process a PDF to see the summary.</p>
+            </div>
+            <div class="table-wrap summary-table-scroll">
+              <table id="invoice-summary-table">
+                <thead></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <details class="raw-panel">
+            <summary>Raw OCR and GPT outputs</summary>
+            <pre id="invoice-raw-output"></pre>
+          </details>
         </section>
       </main>
 
