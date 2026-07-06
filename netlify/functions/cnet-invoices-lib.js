@@ -125,8 +125,9 @@ async function exportInvoiceRows() {
   });
   const content = await response.text();
   if (!response.ok) {
-    throw new Error(`CNET export failed: HTTP ${response.status}. ${content.slice(0, 300)}`);
+    throw new Error(cleanCnetError(`CNET export failed: HTTP ${response.status}.`, content));
   }
+  assertNoCnetTimeout(content);
   if (/name=["']_username["']/i.test(content)) {
     throw new Error("CNET returned to login while exporting invoices.");
   }
@@ -139,8 +140,9 @@ async function downloadInvoicePdf(row, jar) {
   const showResponse = await cnetRequest(jar, `/manager/invoices/${encodeURIComponent(row.invoiceId)}/show`);
   const showHtml = await showResponse.text();
   if (!showResponse.ok) {
-    throw new Error(`Could not open invoice ${row.invoiceId}: HTTP ${showResponse.status}.`);
+    throw new Error(cleanCnetError(`Could not open invoice ${row.invoiceId}: HTTP ${showResponse.status}.`, showHtml));
   }
+  assertNoCnetTimeout(showHtml);
   const pdfHref = extractPdfHref(showHtml);
   const pdfResponse = await cnetRequest(jar, pdfHref, {
     headers: { Accept: "application/pdf,*/*" },
@@ -339,11 +341,40 @@ function normalizeCsvRows(csvText, fileName) {
     try {
       parseCreationDate(row.creationDate);
     } catch (error) {
-      row.errors.push(`Fila ${row.sourceRowNumber}: ${error.message}`);
+      row.errors.push(`Row ${row.sourceRowNumber}: ${error.message}`);
     }
     rows.push(row);
   }
   return { fileName, rows, errors };
+}
+
+function assertNoCnetTimeout(text) {
+  if (/Inactivity Timeout|Too much time has passed without sending any data/i.test(String(text || ""))) {
+    throw new Error("CNET session timed out while exporting invoices. Try the download again.");
+  }
+}
+
+function cleanCnetError(prefix, body) {
+  const text = htmlToText(body);
+  if (/Inactivity Timeout|Too much time has passed without sending any data/i.test(text)) {
+    return "CNET session timed out while exporting invoices. Try the download again.";
+  }
+  return `${prefix} ${text.slice(0, 220)}`.trim();
+}
+
+function htmlToText(value) {
+  return String(value || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function parseCsv(source) {

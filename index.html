@@ -42,6 +42,46 @@
 
       <div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
 
+      <div class="modal-backdrop" id="folder-confirm-modal" hidden>
+        <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="folder-confirm-title">
+          <div class="confirm-modal-header">
+            <span class="confirm-modal-icon" aria-hidden="true"><i data-lucide="folder-plus"></i></span>
+            <div>
+              <h2 id="folder-confirm-title">Create missing SharePoint folders?</h2>
+              <p>The upload cannot continue until these folders exist.</p>
+            </div>
+          </div>
+
+          <div class="confirm-details" aria-label="Missing folder details">
+            <div class="confirm-detail">
+              <span>Expected path</span>
+              <code id="folder-confirm-expected"></code>
+            </div>
+            <div class="confirm-detail">
+              <span>Last existing location</span>
+              <code id="folder-confirm-existing"></code>
+            </div>
+            <div class="confirm-detail">
+              <span>First missing folder</span>
+              <code id="folder-confirm-missing"></code>
+            </div>
+          </div>
+
+          <div class="confirm-create-list">
+            <span>Folders that will be created</span>
+            <ul id="folder-confirm-create-list"></ul>
+          </div>
+
+          <div class="confirm-modal-actions">
+            <button class="btn" id="folder-confirm-cancel" type="button">Cancel upload</button>
+            <button class="btn btn-primary" id="folder-confirm-create" type="button">
+              <i data-lucide="check"></i>
+              <span>Create and continue</span>
+            </button>
+          </div>
+        </section>
+      </div>
+
       <main id="main-panel" hidden>
         <section class="tab-panel is-active" id="stamp-tab">
           <form class="work-surface" id="stamp-form">
@@ -63,10 +103,10 @@
               <div class="field field-wide">
                 <span>Invoice file</span>
                 <label class="dropzone" id="invoice-dropzone" for="invoice-file">
-                  <input id="invoice-file" type="file" accept=".eml,.pdf,.zip,.jpg,.jpeg,.png,.webp" multiple>
+                  <input id="invoice-file" type="file" accept=".eml,.msg,.pdf,.zip,.jpg,.jpeg,.png,.webp" multiple>
                   <span class="dropzone-icon"><i data-lucide="file-up"></i></span>
                   <strong id="dropzone-title">Drop files here</strong>
-                  <small id="dropzone-caption">or click to select EML, PDFs, ZIPs, JPG, PNG, or WebP</small>
+                  <small id="dropzone-caption">or click to select EML, MSG, PDFs, ZIPs, JPG, PNG, or WebP</small>
                 </label>
                 <ul class="upload-list" id="upload-list" aria-label="Queued files"></ul>
                 <section class="email-preview-panel" id="email-preview-panel" hidden>
@@ -76,7 +116,7 @@
                   </div>
                   <div class="email-preview-list" id="email-preview-list"></div>
                 </section>
-                <small>EML, PDF, ZIP with PDFs/images, or direct image upload. TIFF and BMP are not converted in this web version.</small>
+                <small>EML, MSG, PDF, ZIP with PDFs/images, or direct image upload. TIFF and BMP are not converted in this web version.</small>
               </div>
 
               <label class="field">

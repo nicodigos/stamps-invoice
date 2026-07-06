@@ -11,7 +11,7 @@ import {
   EXPENSE_CATEGORIES,
   TEMPLATE_MONTHS,
 } from "./data.js";
-import { assertSharePointFolderPath, downloadSharePointFile, uploadSharePointFile } from "./graph.js";
+import { downloadSharePointFile, ensureSharePointFolderPath, uploadSharePointFile } from "./graph.js";
 import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
@@ -73,6 +73,13 @@ const elements = {
   templateCountOutput: $("#template-count-output"),
   templatePathOutput: $("#template-path-output"),
   folderTemplateTree: $("#folder-template-tree"),
+  folderConfirmModal: $("#folder-confirm-modal"),
+  folderConfirmExpected: $("#folder-confirm-expected"),
+  folderConfirmExisting: $("#folder-confirm-existing"),
+  folderConfirmMissing: $("#folder-confirm-missing"),
+  folderConfirmCreateList: $("#folder-confirm-create-list"),
+  folderConfirmCancel: $("#folder-confirm-cancel"),
+  folderConfirmCreate: $("#folder-confirm-create"),
 };
 
 boot().catch((error) => showFlash(error.message, "error"));
@@ -83,6 +90,7 @@ let currentEmailPreviews = [];
 let emailPreviewRenderId = 0;
 let currentFolderTemplateText = "";
 let templateBankAccounts = [];
+let folderConfirmResolver = null;
 const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
 const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
 const TEMPLATE_ACCOUNT_TYPES = ["debit", "credit"];
@@ -162,6 +170,14 @@ function wireButtons() {
   elements.refreshFileTreeBtn.addEventListener("click", () => runGuarded(refreshFileTree));
   elements.generateFolderTemplateBtn.addEventListener("click", () => runGuarded(generateFolderTemplate));
   elements.copyFolderTemplateBtn.addEventListener("click", () => runGuarded(copyFolderTemplate));
+  elements.folderConfirmCancel.addEventListener("click", () => closeFolderCreationDialog(false));
+  elements.folderConfirmCreate.addEventListener("click", () => closeFolderCreationDialog(true));
+  elements.folderConfirmModal.addEventListener("click", (event) => {
+    if (event.target === elements.folderConfirmModal) closeFolderCreationDialog(false);
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.folderConfirmModal.hidden) closeFolderCreationDialog(false);
+  });
   elements.templateCompanyInput.addEventListener("change", renderFolderTemplate);
   elements.templateYearInput.addEventListener("change", renderFolderTemplate);
   elements.templateMonthInput.addEventListener("change", renderFolderTemplate);
@@ -196,7 +212,7 @@ function addFilesToQueue(files) {
 function renderUploadQueue() {
   if (!queuedFiles.length) {
     elements.dropzoneTitle.textContent = "Drop files here";
-    elements.dropzoneCaption.textContent = "or click to select EML, PDFs, ZIPs, JPG, PNG, or WebP";
+    elements.dropzoneCaption.textContent = "or click to select EML, MSG, PDFs, ZIPs, JPG, PNG, or WebP";
     elements.uploadList.innerHTML = "";
     renderEmailPreviews();
     return;
@@ -222,7 +238,7 @@ async function renderEmailPreviews() {
   const renderId = ++emailPreviewRenderId;
   const emailFiles = queuedFiles
     .map((item) => item.file)
-    .filter((file) => /\.eml$/i.test(file.name || ""));
+    .filter((file) => /\.(eml|msg)$/i.test(file.name || ""));
 
   currentEmailPreviews = [];
   if (!emailFiles.length) {
@@ -251,7 +267,7 @@ async function renderEmailPreviews() {
 
   if (renderId !== emailPreviewRenderId) return;
   currentEmailPreviews = previews.filter(Boolean);
-  elements.emailPreviewCount.textContent = `${currentEmailPreviews.length} email${currentEmailPreviews.length === 1 ? "" : "s"}`;
+  elements.emailPreviewCount.textContent = `${currentEmailPreviews.length} message${currentEmailPreviews.length === 1 ? "" : "s"}`;
   elements.emailPreviewList.innerHTML = currentEmailPreviews.map(renderEmailPreview).join("");
   window.lucide?.createIcons();
 }
@@ -509,10 +525,10 @@ async function processAndUploadInvoice() {
       fileName,
     });
 
-    // Critical rule: the stamping flow must NEVER create SharePoint folders.
-    // If a required folder is missing, stop here with a detailed error so the user can create it manually.
-    await assertSharePointFolderPath(bankFolderPath);
-    await assertSharePointFolderPath(categoryFolderPath);
+    // Accounting folders may be created only after the user sees exactly what is missing and approves it.
+    // Never create SharePoint accounting folders silently from the stamping flow.
+    await ensureSharePointFolderPath(bankFolderPath, { confirmCreate: confirmSharePointFolderCreation });
+    await ensureSharePointFolderPath(categoryFolderPath, { confirmCreate: confirmSharePointFolderCreation });
 
     showFlash("Uploading combined PDF to SharePoint...", "info");
     await uploadSharePointFile(bankTargetPath, stampedBytes, "application/pdf");
@@ -537,6 +553,38 @@ async function processAndUploadInvoice() {
 function buildStampedFileName({ paymentCode, clientInvoice, date }) {
   const baseName = `P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
   return `${baseName}.pdf`;
+}
+
+function confirmSharePointFolderCreation({ fullPath, missingPath, missingParts, lastExistingPath }) {
+  return showFolderCreationDialog({ fullPath, missingPath, missingParts, lastExistingPath });
+}
+
+function showFolderCreationDialog({ fullPath, missingPath, missingParts, lastExistingPath }) {
+  return new Promise((resolve) => {
+    folderConfirmResolver = resolve;
+    elements.folderConfirmExpected.textContent = fullPath;
+    elements.folderConfirmExisting.textContent = lastExistingPath;
+    elements.folderConfirmMissing.textContent = missingPath;
+    elements.folderConfirmCreateList.innerHTML = missingParts
+      .map((part) => `<li>${escapeHtml(part)}</li>`)
+      .join("");
+    elements.folderConfirmModal.hidden = false;
+    elements.folderConfirmModal.classList.remove("is-closing");
+    window.lucide?.createIcons();
+    elements.folderConfirmCreate.focus();
+  });
+}
+
+function closeFolderCreationDialog(confirmed) {
+  if (!folderConfirmResolver) return;
+  const resolve = folderConfirmResolver;
+  folderConfirmResolver = null;
+  elements.folderConfirmModal.classList.add("is-closing");
+  window.setTimeout(() => {
+    elements.folderConfirmModal.hidden = true;
+    elements.folderConfirmModal.classList.remove("is-closing");
+    resolve(confirmed);
+  }, 140);
 }
 
 function buildTargetPaths({ company, bank, category, date, fileName }) {
@@ -1005,9 +1053,29 @@ async function postJson(url, payload) {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(cleanErrorText(await response.text()));
   }
   return response.json();
+}
+
+function cleanErrorText(value) {
+  const text = String(value || "");
+  const stripped = text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/Inactivity Timeout|Too much time has passed without sending any data/i.test(stripped)) {
+    return "CNET session timed out while exporting invoices. Try the download again.";
+  }
+  return stripped || "Request failed.";
 }
 
 function resetDownloaderUi() {

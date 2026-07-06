@@ -4,7 +4,10 @@ const PDF_EXTS = new Set([".pdf"]);
 const ZIP_EXTS = new Set([".zip"]);
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const EML_EXTS = new Set([".eml"]);
+const MSG_EXTS = new Set([".msg"]);
+const MESSAGE_EXTS = new Set([...EML_EXTS, ...MSG_EXTS]);
 const POSTAL_MIME_URL = "https://esm.sh/postal-mime@2.4.3";
+const MSG_READER_URL = "https://esm.sh/@kenjiuno/msgreader@1.28.0";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
 
 export async function uploadedFileToPdfBytes(file) {
@@ -23,8 +26,8 @@ export async function uploadedFileToPdfByteList(file) {
   if (IMAGE_EXTS.has(ext)) {
     return [await imageToPdfBytes(await file.arrayBuffer(), ext)];
   }
-  if (EML_EXTS.has(ext)) {
-    const parsed = await parseEmailFile(file);
+  if (MESSAGE_EXTS.has(ext)) {
+    const parsed = await parseMessageFile(file);
     return Promise.all(parsed.attachments.map((attachment) => fileContentToPdfBytes(attachment.bytes, attachment.name)));
   }
   throw new Error(`Unsupported file type: ${ext || file.type || "no extension"}.`);
@@ -32,8 +35,8 @@ export async function uploadedFileToPdfByteList(file) {
 
 export async function fileToAnalysisPayload(file) {
   const ext = extensionOf(file.name);
-  if (EML_EXTS.has(ext)) {
-    const parsed = await parseEmailFile(file);
+  if (MESSAGE_EXTS.has(ext)) {
+    const parsed = await parseMessageFile(file);
     const images = [];
     for (const attachment of parsed.attachments) {
       images.push(...await contentToAnalysisImages(attachment.bytes, attachment.name, attachment.name));
@@ -54,8 +57,8 @@ export async function fileToAnalysisPayload(file) {
 
 export async function emailFileToPreview(file) {
   const ext = extensionOf(file.name);
-  if (!EML_EXTS.has(ext)) return null;
-  const parsed = await parseEmailFile(file, { includeAllAttachments: true });
+  if (!MESSAGE_EXTS.has(ext)) return null;
+  const parsed = await parseMessageFile(file, { includeAllAttachments: true });
   return {
     sourceName: file.name,
     email: parsed.email,
@@ -136,13 +139,19 @@ async function zipToPdfByteList(file) {
   }
 
   if (out.length === 0) {
-    throw new Error("El ZIP no contiene PDFs o imagenes soportadas.");
+    throw new Error("The ZIP does not contain supported PDFs or images.");
   }
 
   return out;
 }
 
-async function parseEmailFile(file, options = {}) {
+async function parseMessageFile(file, options = {}) {
+  const ext = extensionOf(file.name);
+  if (MSG_EXTS.has(ext)) return parseMsgFile(file, options);
+  return parseEmlFile(file, options);
+}
+
+async function parseEmlFile(file, options = {}) {
   const { default: PostalMime } = await import(POSTAL_MIME_URL);
   const email = await PostalMime.parse(await file.arrayBuffer());
   let attachments = (email.attachments || [])
@@ -161,8 +170,7 @@ async function parseEmailFile(file, options = {}) {
   }
 
   if (!attachments.length && !options.includeAllAttachments) {
-    const attachmentType = options.includeAllAttachments ? "adjuntos descargables" : "adjuntos PDF o imagen soportados";
-    throw new Error(`El email "${file.name}" no tiene ${attachmentType}.`);
+    throw new Error(`The email "${file.name}" does not have supported PDF or image attachments.`);
   }
 
   return {
@@ -171,6 +179,44 @@ async function parseEmailFile(file, options = {}) {
       from: email.from?.address || email.from?.name || "",
       date: email.date || "",
       text: String(email.text || "").slice(0, 6000),
+    },
+    attachments,
+  };
+}
+
+async function parseMsgFile(file, options = {}) {
+  const { default: MsgReader } = await import(MSG_READER_URL);
+  const reader = new MsgReader(await file.arrayBuffer());
+  const message = reader.getFileData();
+  let attachments = (message.attachments || [])
+    .map((attachment) => {
+      const content = reader.getAttachment(attachment);
+      const name = content?.fileName || attachment.fileName || attachment.fileNameShort || "attachment";
+      return {
+        name,
+        mimeType: mimeTypeFromName(name),
+        disposition: "attachment",
+        contentId: attachment.contentId || "",
+        related: false,
+        bytes: toUint8Array(content?.content),
+      };
+    })
+    .filter((attachment) => attachment.bytes.byteLength > 0);
+
+  if (!options.includeAllAttachments) {
+    attachments = attachments.filter((attachment) => isProcessableAttachment(attachment));
+  }
+
+  if (!attachments.length && !options.includeAllAttachments) {
+    throw new Error(`The Outlook message "${file.name}" does not have supported PDF or image attachments.`);
+  }
+
+  return {
+    email: {
+      subject: message.subject || "",
+      from: message.senderEmail || message.senderName || headerValue(message.headers, "From"),
+      date: message.messageDeliveryTime || message.clientSubmitTime || message.creationTime || headerValue(message.headers, "Date"),
+      text: String(message.body || message.bodyHTML || "").slice(0, 6000),
     },
     attachments,
   };
@@ -189,7 +235,32 @@ async function fileContentToPdfBytes(bytes, name) {
   const ext = extensionOf(name);
   if (PDF_EXTS.has(ext)) return bytes;
   if (IMAGE_EXTS.has(ext)) return imageToPdfBytes(bytes, ext);
-  throw new Error(`Adjunto no soportado: ${name}`);
+  throw new Error(`Unsupported attachment: ${name}`);
+}
+
+function headerValue(headers, name) {
+  const pattern = new RegExp(`^${escapeRegExp(name)}:\\s*(.+)$`, "im");
+  return String(headers || "").match(pattern)?.[1]?.trim() || "";
+}
+
+function mimeTypeFromName(name) {
+  const ext = extensionOf(name);
+  if (PDF_EXTS.has(ext)) return "application/pdf";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".zip") return "application/zip";
+  if (ext === ".eml") return "message/rfc822";
+  if (ext === ".msg") return "application/vnd.ms-outlook";
+  if (ext === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (ext === ".xls") return "application/vnd.ms-excel";
+  if (ext === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (ext === ".doc") return "application/msword";
+  return "application/octet-stream";
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function attachmentToThumbnailDataUrl(bytes, name) {

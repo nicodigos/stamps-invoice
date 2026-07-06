@@ -117,6 +117,65 @@ export async function assertSharePointFolderPath(path) {
   }
 }
 
+async function createSharePointFolder(driveId, parentPath, folderName) {
+  const encodedParentPath = encodeURIComponent(parentPath).replaceAll("%2F", "/");
+  const url = parentPath
+    ? `${GRAPH_BASE}/drives/${driveId}/root:/${encodedParentPath}:/children`
+    : `${GRAPH_BASE}/drives/${driveId}/root/children`;
+
+  return graphJson(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: folderName,
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail",
+    }),
+  });
+}
+
+export async function ensureSharePointFolderPath(path, options = {}) {
+  const driveId = await resolveDriveId();
+  const parts = String(path || "").split("/").filter(Boolean);
+  let currentPath = "";
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const nextPath = currentPath ? `${currentPath}/${part}` : part;
+    const encodedPath = encodeURIComponent(nextPath).replaceAll("%2F", "/");
+
+    try {
+      const item = await graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}?$select=id,name,folder`);
+      if (!item.folder) {
+        throw new Error(`Expected a folder but found a file at: ${nextPath}`);
+      }
+      currentPath = nextPath;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+
+      const missingParts = parts.slice(index);
+      const lastExistingPath = currentPath || "(drive root)";
+      const confirmed = await options.confirmCreate?.({
+        fullPath: path,
+        missingPath: nextPath,
+        missingParts,
+        lastExistingPath,
+      });
+
+      if (!confirmed) {
+        throw new Error(`Folder creation cancelled. Missing SharePoint folder: ${nextPath}. Expected full folder path: ${path}. Last existing location: ${lastExistingPath}.`);
+      }
+
+      let parentPath = currentPath;
+      for (const missingPart of missingParts) {
+        await createSharePointFolder(driveId, parentPath, missingPart);
+        parentPath = parentPath ? `${parentPath}/${missingPart}` : missingPart;
+      }
+      return;
+    }
+  }
+}
+
 export async function downloadSharePointTextFile(path) {
   const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
   const fileName = String(path || "").split("/").pop();
