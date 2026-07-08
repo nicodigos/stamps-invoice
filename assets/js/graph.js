@@ -176,6 +176,50 @@ export async function ensureSharePointFolderPath(path, options = {}) {
   }
 }
 
+export async function listSharePointFolders(path) {
+  const driveId = await resolveDriveId();
+  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
+  try {
+    let url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$top=200&$select=name,folder`;
+    const items = [];
+    while (url) {
+      const result = await graphJson(url);
+      items.push(...(result.value || []));
+      url = result["@odata.nextLink"] || "";
+    }
+    return items
+      .filter((item) => item.folder)
+      .map((item) => item.name)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  } catch (error) {
+    if (isLookupMiss(error)) return [];
+    throw error;
+  }
+}
+
+export async function listSharePointFileNames(path) {
+  const driveId = await resolveDriveId();
+  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
+  try {
+    let url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$top=200&$select=name,file`;
+    const items = [];
+    while (url) {
+      const result = await graphJson(url);
+      items.push(...(result.value || []));
+      url = result["@odata.nextLink"] || "";
+    }
+    return items
+      .filter((item) => item.file)
+      .map((item) => item.name)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  } catch (error) {
+    if (isLookupMiss(error)) return [];
+    throw error;
+  }
+}
+
 export async function downloadSharePointTextFile(path) {
   const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
   const fileName = String(path || "").split("/").pop();

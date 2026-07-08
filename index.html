@@ -23,13 +23,21 @@
           </div>
           <div class="hero-center">
             <h1>CNET Utilities</h1>
-            <nav class="header-nav" aria-label="Sections">
-              <button class="tab-button is-active" type="button" data-tab-target="stamp-tab">Stamp</button>
-              <button class="tab-button" type="button" data-tab-target="downloader-tab">Invoice Downloader</button>
-              <button class="tab-button" type="button" data-tab-target="folder-template-tab">Folder Template</button>
-              <button class="tab-button" type="button" data-tab-target="invoice-database-tab">Processed receipts</button>
-              <button class="tab-button" type="button" data-tab-target="invoice-upload-tab">Upload Receipts</button>
-            </nav>
+            <div class="header-nav-shell">
+              <button class="nav-scroll-btn" id="header-nav-prev" type="button" aria-label="Previous section">
+                <i data-lucide="chevron-left"></i>
+              </button>
+              <nav class="header-nav" id="header-nav" aria-label="Sections">
+                <button class="tab-button is-active" type="button" data-tab-target="stamp-tab">Stamp</button>
+                <button class="tab-button" type="button" data-tab-target="downloader-tab">Invoice Downloader</button>
+                <button class="tab-button" type="button" data-tab-target="folder-template-tab">Folder Template</button>
+                <button class="tab-button" type="button" data-tab-target="invoice-database-tab">Processed receipts</button>
+                <button class="tab-button" type="button" data-tab-target="invoice-upload-tab">Upload Receipts</button>
+              </nav>
+              <button class="nav-scroll-btn" id="header-nav-next" type="button" aria-label="Next section">
+                <i data-lucide="chevron-right"></i>
+              </button>
+            </div>
           </div>
           <div class="hero-side hero-side-right">
             <button class="microsoft-auth-btn" id="microsoft-auth-btn" type="button">
@@ -92,6 +100,12 @@
                   <i data-lucide="sparkles"></i>
                   <span>Auto-fill</span>
                 </button>
+                <div class="segmented-control segmented-control-structure" role="radiogroup" aria-label="Folder structure">
+                  <input id="folder-structure-legacy-input" name="folder-structure" type="radio" value="legacy">
+                  <label for="folder-structure-legacy-input">Legacy</label>
+                  <input id="folder-structure-input" name="folder-structure" type="radio" value="new" checked>
+                  <label for="folder-structure-input">New</label>
+                </div>
                 <button class="btn btn-primary" id="process-btn" type="submit">
                   <i data-lucide="upload-cloud"></i>
                   <span>Process</span>
@@ -108,42 +122,88 @@
                   <strong id="dropzone-title">Drop files here</strong>
                   <small id="dropzone-caption">or click to select EML, MSG, PDFs, ZIPs, JPG, PNG, or WebP</small>
                 </label>
-                <ul class="upload-list" id="upload-list" aria-label="Queued files"></ul>
-                <section class="email-preview-panel" id="email-preview-panel" hidden>
-                  <div class="email-preview-header">
-                    <h3>Email preview</h3>
-                    <span id="email-preview-count"></span>
-                  </div>
-                  <div class="email-preview-list" id="email-preview-list"></div>
-                </section>
                 <small>EML, MSG, PDF, ZIP with PDFs/images, or direct image upload. TIFF and BMP are not converted in this web version.</small>
               </div>
 
-              <label class="field">
+              <div class="field" id="new-folder-root-field">
+                <span>Folder</span>
+                <div class="segmented-control segmented-control-folder" role="radiogroup" aria-label="Folder">
+                  <input id="new-folder-root-none-input" name="new-folder-root" type="radio" value="" checked>
+                  <label class="folder-none-label" for="new-folder-root-none-input" title="No folder selected" aria-label="No folder selected">
+                    <span class="folder-none-icon" aria-hidden="true"></span>
+                  </label>
+                  <input id="new-folder-root-documents-input" name="new-folder-root" type="radio" value="Documents">
+                  <label for="new-folder-root-documents-input">Documents</label>
+                  <input id="new-folder-root-expenses-input" name="new-folder-root" type="radio" value="Expenses">
+                  <label for="new-folder-root-expenses-input">Expenses</label>
+                  <input id="new-folder-root-income-input" name="new-folder-root" type="radio" value="Income">
+                  <label for="new-folder-root-income-input">Income</label>
+                  <input id="new-folder-root-statements-input" name="new-folder-root" type="radio" value="Statements">
+                  <label for="new-folder-root-statements-input">Statements</label>
+                </div>
+              </div>
+              <label class="field" id="date-field">
                 <span>Date</span>
                 <input id="date-input" type="date" required>
               </label>
-              <label class="field">
-                <span>Bank</span>
-                <select id="bank-input" required></select>
-              </label>
-              <label class="field">
+              <label class="field" id="company-field">
                 <span>Company</span>
                 <select id="company-input" required></select>
               </label>
-              <label class="field">
+              <label class="field" id="legacy-bank-field">
+                <span>Bank</span>
+                <select id="bank-input" required></select>
+              </label>
+              <label class="field" id="new-bank-field" hidden>
+                <span>Bank</span>
+                <select id="new-bank-input"></select>
+              </label>
+              <label class="field" id="account-type-field" hidden>
+                <span>Account type</span>
+                <select id="account-type-input"></select>
+              </label>
+              <div class="field" id="account-number-field" hidden>
+                <span>Last four numbers of the card</span>
+                <div class="combo-field">
+                  <input id="account-number-input" type="text" autocomplete="off" inputmode="numeric" maxlength="4" pattern="\d{4}" placeholder="1234">
+                  <ul class="combo-options" id="account-number-options" hidden></ul>
+                </div>
+              </div>
+              <label class="field" id="income-amount-field" hidden>
+                <span>Monto</span>
+                <input id="income-amount-input" type="text" autocomplete="off" inputmode="decimal">
+              </label>
+              <label class="field" id="income-payment-type-field" hidden>
+                <span>Payment type</span>
+                <select id="income-payment-type-input">
+                  <option value="">Not Identified</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Cash">Cash</option>
+                </select>
+              </label>
+              <label class="field" id="category-field">
                 <span>Category</span>
                 <select id="category-input" required></select>
               </label>
-              <label class="field">
-                <span>Payment Code</span>
+              <label class="field" id="payment-code-field">
+                <span id="payment-code-label">Payment Code</span>
                 <input id="payment-code-input" type="text" autocomplete="off" required>
               </label>
-              <label class="field">
-                <span>Client Invoice</span>
-                <input id="client-invoice-input" type="text" autocomplete="off" required>
+              <label class="field" id="client-invoice-field">
+                <span id="client-invoice-label">Client Invoice</span>
+                <textarea id="client-invoice-input" rows="3" autocomplete="off" required></textarea>
               </label>
             </div>
+            <section class="upload-preview-panel" id="upload-preview-panel">
+              <ul class="upload-list" id="upload-list" aria-label="Queued files"></ul>
+              <section class="email-preview-panel" id="email-preview-panel" hidden>
+                <div class="email-preview-header">
+                  <h3>Email preview</h3>
+                  <span id="email-preview-count"></span>
+                </div>
+                <div class="email-preview-list" id="email-preview-list"></div>
+              </section>
+            </section>
           </form>
 
           <section class="result-panel" id="stamp-result" hidden>
@@ -155,9 +215,9 @@
               </a>
             </div>
             <dl>
-              <dt>Bank folder</dt>
+              <dt id="bank-path-label">Bank folder</dt>
               <dd id="bank-path-output"></dd>
-              <dt>Category folder</dt>
+              <dt id="category-path-label">Category folder</dt>
               <dd id="category-path-output"></dd>
             </dl>
           </section>

@@ -72,27 +72,49 @@ export async function emailFileToPreview(file) {
   };
 }
 
-export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoice }) {
+export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoice, stampType = "paid", title = "", description = "" }) {
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
   const doc = await PDFDocument.load(inputBytes);
   const font = await doc.embedFont(StandardFonts.HelveticaBold);
   const color = rgb(0.75, 0, 0);
+  const formattedDate = formatStampDate(date);
+
+  if (title) doc.setTitle(title);
+  if (description) doc.setSubject(description);
 
   for (const page of doc.getPages()) {
-    const x = 40;
-    const y = 105;
-    drawBoldText(page, "PAID", x, y + 92, { size: 22, font, color });
-    [
-      `Payment Code: ${paymentCode}`,
-      `Client Invoice: ${clientInvoice}`,
-      `Payment Date: ${date}`,
-      "Paid by Paola Pongo",
-    ].forEach((line, index) => {
-      drawBoldText(page, line, x, y + 62 - index * 18, { size: 14, font, color });
-    });
+    const label = stampType === "paid" ? "PAID" : "PROCESSED";
+    drawCornerStamp(page, `${label} ${formattedDate}`, { font, color });
   }
 
   return doc.save();
+}
+
+function drawCornerStamp(page, text, { font, color }) {
+  const size = 6;
+  const margin = 5;
+  const { width, height } = page.getSize();
+  const stampText = String(text || "").trim();
+  if (!stampText) return;
+  const textWidth = font.widthOfTextAtSize(stampText, size);
+  const x = Math.max(margin, width - margin - textWidth);
+  const y = height - margin - size;
+  drawBoldText(page, stampText, x, y, { size, font, color });
+}
+
+function formatStampDate(value) {
+  const text = String(value || "").trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const date = new Date(text);
+  if (!Number.isNaN(date.getTime())) {
+    return [
+      String(date.getDate()).padStart(2, "0"),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getFullYear()),
+    ].join("/");
+  }
+  return text;
 }
 
 export async function mergePdfBytes(pdfFilesBytes) {

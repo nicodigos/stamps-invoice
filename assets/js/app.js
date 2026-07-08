@@ -9,9 +9,13 @@ import {
   COMPANIES,
   COMPANY_SHAREPOINT_DIRS,
   EXPENSE_CATEGORIES,
+  NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH,
+  NEW_STRUCTURE_FOLDER_ROOTS,
+  NEW_STRUCTURE_STAMP_CATEGORIES,
+  STAMP_BANK_TO_TEMPLATE_BANK,
   TEMPLATE_MONTHS,
 } from "./data.js";
-import { downloadSharePointFile, ensureSharePointFolderPath, uploadSharePointFile } from "./graph.js";
+import { downloadSharePointFile, ensureSharePointFolderPath, listSharePointFileNames, listSharePointFolders, uploadSharePointFile } from "./graph.js";
 import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
@@ -42,13 +46,33 @@ const elements = {
   dateInput: $("#date-input"),
   companyInput: $("#company-input"),
   bankInput: $("#bank-input"),
+  newBankField: $("#new-bank-field"),
+  newBankInput: $("#new-bank-input"),
+  accountTypeField: $("#account-type-field"),
+  accountTypeInput: $("#account-type-input"),
+  accountNumberField: $("#account-number-field"),
+  accountNumberInput: $("#account-number-input"),
+  accountNumberOptions: $("#account-number-options"),
+  incomeAmountField: $("#income-amount-field"),
+  incomeAmountInput: $("#income-amount-input"),
+  incomePaymentTypeField: $("#income-payment-type-field"),
+  incomePaymentTypeInput: $("#income-payment-type-input"),
   categoryInput: $("#category-input"),
+  folderStructureLegacyInput: $("#folder-structure-legacy-input"),
+  folderStructureInput: $("#folder-structure-input"),
+  newFolderRootField: $("#new-folder-root-field"),
+  newFolderRootInputs: Array.from(document.querySelectorAll("input[name='new-folder-root']")),
+  newFolderRootNoneInput: $("#new-folder-root-none-input"),
   paymentCodeInput: $("#payment-code-input"),
+  paymentCodeLabel: $("#payment-code-label"),
   clientInvoiceInput: $("#client-invoice-input"),
+  clientInvoiceLabel: $("#client-invoice-label"),
   autofillBtn: $("#autofill-btn"),
   processBtn: $("#process-btn"),
   stampResult: $("#stamp-result"),
+  bankPathLabel: $("#bank-path-label"),
   bankPathOutput: $("#bank-path-output"),
+  categoryPathLabel: $("#category-path-label"),
   categoryPathOutput: $("#category-path-output"),
   downloadLink: $("#download-link"),
   invoiceDownloadBtn: $("#invoice-download-btn"),
@@ -60,6 +84,9 @@ const elements = {
   downloadSkippedCount: $("#download-skipped-count"),
   downloadErrors: $("#download-errors"),
   downloadErrorList: $("#download-error-list"),
+  headerNav: $("#header-nav"),
+  headerNavPrev: $("#header-nav-prev"),
+  headerNavNext: $("#header-nav-next"),
   refreshFileTreeBtn: $("#refresh-file-tree-btn"),
   fileTreeSearch: $("#file-tree-search"),
   fileTreeTotal: $("#file-tree-total"),
@@ -91,19 +118,30 @@ let emailPreviewRenderId = 0;
 let currentFolderTemplateText = "";
 let templateBankAccounts = [];
 let folderConfirmResolver = null;
+let stampFolderOptionsRequestId = 0;
+let discoveredCompanyFolders = false;
+let accountNumberFolderOptions = [];
+let autoFillInProgress = false;
 const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
+const NOT_IDENTIFIED_FOLDER = "Not Identified";
+const NEW_STRUCTURE_MIN_UPLOAD_DATE = new Date("2026-07-01T00:00:00");
 const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
 const TEMPLATE_ACCOUNT_TYPES = ["debit", "credit"];
 
 async function boot() {
   wireTabs();
+  wireHeaderNavScrolling();
   wireButtons();
   await loadConfig();
   populateSelect(elements.companyInput, COMPANIES);
   populateSelect(elements.bankInput, BANKS);
-  populateSelect(elements.categoryInput, CATEGORIES);
+  populateSelectWithPreservedValue(elements.newBankInput, withCommonFolderOptions([], templateBankOptions()));
+  populateSelectWithPreservedValue(elements.accountTypeInput, withCommonFolderOptions([], ["debit", "credit"]));
+  populateAccountNumberOptions([NOT_IDENTIFIED_FOLDER]);
   populateSelect(elements.templateCompanyInput, COMPANIES);
   elements.dateInput.value = new Date().toISOString().slice(0, 10);
+  restoreStampFolderStructurePreference();
+  syncStampCategoryOptions();
   elements.templateYearInput.value = String(new Date().getFullYear());
   elements.templateMonthInput.value = TEMPLATE_MONTHS[new Date().getMonth()];
   renderFolderTemplate();
@@ -111,6 +149,8 @@ async function boot() {
   renderAuthState();
   await initInvoiceReader();
   window.lucide?.createIcons();
+  revealActiveHeaderNavButton("auto");
+  setTimeout(() => revealActiveHeaderNavButton("auto"), 0);
 }
 
 function wireTabs() {
@@ -120,12 +160,77 @@ function wireTabs() {
       document.querySelectorAll(".tab-panel").forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
       $(`#${button.dataset.tabTarget}`).classList.add("is-active");
+      scrollHeaderNavButtonIntoView(button);
       syncInvoiceReaderAuth();
       if (button.dataset.tabTarget === "folder-template-tab") {
         runGuarded(loadFolderTemplateCsv);
       }
     });
   });
+}
+
+function wireHeaderNavScrolling() {
+  elements.headerNavPrev.addEventListener("click", () => scrollHeaderNavByStep(-1));
+  elements.headerNavNext.addEventListener("click", () => scrollHeaderNavByStep(1));
+  elements.headerNav.addEventListener("scroll", updateHeaderNavScrollButtons, { passive: true });
+  window.addEventListener("resize", updateHeaderNavScrollButtons);
+  if (window.ResizeObserver) {
+    new ResizeObserver(updateHeaderNavScrollButtons).observe(elements.headerNav);
+  }
+  updateHeaderNavScrollButtons();
+  requestAnimationFrame(() => {
+    revealActiveHeaderNavButton("auto");
+  });
+}
+
+function scrollHeaderNavByStep(direction) {
+  const nav = elements.headerNav;
+  const maxScrollLeft = Math.max(0, nav.scrollWidth - nav.clientWidth);
+  const push = Math.max(160, Math.floor(nav.clientWidth * 0.8));
+  const targetLeft = Math.max(0, Math.min(nav.scrollLeft + direction * push, maxScrollLeft));
+  nav.scrollTo({ left: targetLeft, behavior: "smooth" });
+}
+
+function revealActiveHeaderNavButton(behavior = "smooth") {
+  syncHeaderNavActiveButton();
+  const activeButton = document.querySelector(".tab-button.is-active");
+  if (activeButton) {
+    scrollHeaderNavButtonIntoView(activeButton, behavior);
+  }
+}
+
+function syncHeaderNavActiveButton() {
+  const activePanel = document.querySelector(".tab-panel.is-active");
+  if (!activePanel) return;
+  const activeButton = document.querySelector(`.tab-button[data-tab-target="${activePanel.id}"]`);
+  if (!activeButton) return;
+  document.querySelectorAll(".tab-button").forEach((item) => item.classList.toggle("is-active", item === activeButton));
+}
+
+function scrollHeaderNavButtonIntoView(button, behavior = "smooth") {
+  const nav = elements.headerNav;
+  const maxScrollLeft = Math.max(0, nav.scrollWidth - nav.clientWidth);
+  const buttonLeft = button.offsetLeft - nav.offsetLeft;
+  const centeredLeft = buttonLeft - (nav.clientWidth - button.offsetWidth) / 2;
+  const targetLeft = Math.max(0, Math.min(centeredLeft, maxScrollLeft));
+  nav.scrollTo({ left: targetLeft, behavior });
+  updateHeaderNavScrollButtons();
+}
+
+function updateHeaderNavScrollButtons() {
+  const nav = elements.headerNav;
+  const hasOverflow = nav.scrollWidth > nav.clientWidth + 1;
+  const shell = nav.parentElement;
+  const atStart = nav.scrollLeft <= 1;
+  const atEnd = nav.scrollLeft + nav.clientWidth >= nav.scrollWidth - 1;
+  shell?.classList.toggle("has-overflow", hasOverflow);
+  shell?.classList.toggle("is-at-start", hasOverflow && atStart);
+  shell?.classList.toggle("is-at-end", hasOverflow && atEnd);
+  elements.headerNavPrev.hidden = !hasOverflow;
+  elements.headerNavNext.hidden = !hasOverflow;
+  if (!hasOverflow) return;
+  elements.headerNavPrev.disabled = atStart;
+  elements.headerNavNext.disabled = atEnd;
 }
 
 function wireButtons() {
@@ -170,6 +275,37 @@ function wireButtons() {
   elements.refreshFileTreeBtn.addEventListener("click", () => runGuarded(refreshFileTree));
   elements.generateFolderTemplateBtn.addEventListener("click", () => runGuarded(generateFolderTemplate));
   elements.copyFolderTemplateBtn.addEventListener("click", () => runGuarded(copyFolderTemplate));
+  [elements.folderStructureLegacyInput, elements.folderStructureInput].forEach((input) => input.addEventListener("change", () => {
+    localStorage.setItem("stampFolderStructure", stampUsesNewFolderStructure() ? "new" : "legacy");
+    syncStampCategoryOptions();
+    runGuarded(refreshStampFolderControls);
+  }));
+  elements.newFolderRootInputs.forEach((input) => input.addEventListener("change", () => {
+    syncStampCategoryOptions();
+    runGuarded(refreshStampFolderControls);
+  }));
+  elements.companyInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.dateInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.categoryInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.newBankInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.accountTypeInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.accountNumberInput.addEventListener("focus", renderAccountNumberOptions);
+  elements.accountNumberInput.addEventListener("input", () => {
+    elements.accountNumberInput.value = lastFourDigits(elements.accountNumberInput.value);
+    renderAccountNumberOptions();
+  });
+  elements.accountNumberField.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      if (!elements.accountNumberField.contains(document.activeElement)) hideAccountNumberOptions();
+    }, 0);
+  });
+  elements.accountNumberOptions.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const button = event.target.closest("[data-account-number]");
+    if (!button) return;
+    elements.accountNumberInput.value = lastFourDigits(button.dataset.accountNumber);
+    hideAccountNumberOptions();
+  });
   elements.folderConfirmCancel.addEventListener("click", () => closeFolderCreationDialog(false));
   elements.folderConfirmCreate.addEventListener("click", () => closeFolderCreationDialog(true));
   elements.folderConfirmModal.addEventListener("click", (event) => {
@@ -177,7 +313,9 @@ function wireButtons() {
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !elements.folderConfirmModal.hidden) closeFolderCreationDialog(false);
+    if (event.key === "Escape") hideAccountNumberOptions();
   });
+  document.addEventListener("pointerdown", closeAccountNumberOptionsOnOutsidePointer, true);
   elements.templateCompanyInput.addEventListener("change", renderFolderTemplate);
   elements.templateYearInput.addEventListener("change", renderFolderTemplate);
   elements.templateMonthInput.addEventListener("change", renderFolderTemplate);
@@ -200,6 +338,9 @@ function wireButtons() {
 }
 
 function addFilesToQueue(files) {
+  if (files.length) {
+    resetStampFolderRoot();
+  }
   for (const file of files) {
     queuedFiles.push({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -214,6 +355,7 @@ function renderUploadQueue() {
     elements.dropzoneTitle.textContent = "Drop files here";
     elements.dropzoneCaption.textContent = "or click to select EML, MSG, PDFs, ZIPs, JPG, PNG, or WebP";
     elements.uploadList.innerHTML = "";
+    syncAutoFillButtonState();
     renderEmailPreviews();
     return;
   }
@@ -231,6 +373,7 @@ function renderUploadQueue() {
     </li>
   `).join("");
   window.lucide?.createIcons();
+  syncAutoFillButtonState();
   renderEmailPreviews();
 }
 
@@ -336,9 +479,11 @@ function downloadEmailAttachment(emailIndex, attachmentIndex) {
 async function autoFillFromQueuedFiles() {
   if (!queuedFiles.length) throw new Error("Select or drop at least one file first.");
 
+  autoFillInProgress = true;
   elements.autofillBtn.disabled = true;
   elements.autofillBtn.querySelector("span").textContent = "Reading";
   try {
+    const folderRoot = currentStampFolderRoot();
     const documents = [];
     for (let index = 0; index < queuedFiles.length; index += 1) {
       const file = queuedFiles[index].file;
@@ -362,7 +507,10 @@ async function autoFillFromQueuedFiles() {
         options: {
           companies: COMPANIES,
           banks: BANKS,
-          categories: CATEGORIES,
+          categories: currentStampCategories(),
+          folderStructure: stampUsesNewFolderStructure() ? "new" : "legacy",
+          folderRoot,
+          newStructureCategoryPaths: NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH,
         },
       }),
     });
@@ -371,26 +519,95 @@ async function autoFillFromQueuedFiles() {
     }
 
     const result = await response.json();
-    applyAutoFillResult(result);
+    applyAutoFillResult(result, folderRoot);
     showFlash(buildAutoFillMessage(result), result.lowConfidence?.length ? "warning" : "success");
   } finally {
-    elements.autofillBtn.disabled = false;
+    autoFillInProgress = false;
+    syncAutoFillButtonState();
     elements.autofillBtn.querySelector("span").textContent = "Auto-fill";
   }
 }
 
-function applyAutoFillResult(result) {
+function applyAutoFillResult(result, folderRoot = currentStampFolderRoot()) {
+  if (folderRoot === "Documents") {
+    applyDocumentsAutoFillResult(result);
+  } else if (folderRoot === "Expenses" || !stampUsesNewFolderStructure()) {
+    applyExpensesAutoFillResult(result);
+  } else if (folderRoot === "Income") {
+    applyIncomeAutoFillResult(result);
+  } else if (folderRoot === "Statements") {
+    applyStatementsAutoFillResult(result);
+  }
+  runGuarded(refreshStampFolderControls);
+}
+
+function applyDocumentsAutoFillResult(result) {
+  setInputValue(elements.dateInput, normalizeDate(result.date));
+  setSelectValue(elements.companyInput, result.company);
+  setNewStructureRootFromCategory(result.category);
+  syncStampCategoryOptions();
+  setSelectValue(elements.categoryInput, result.category);
+  setInputValue(elements.paymentCodeInput, result.suggested_title);
+  setInputValue(elements.clientInvoiceInput, result.description);
+}
+
+function applyExpensesAutoFillResult(result) {
   setInputValue(elements.dateInput, normalizeDate(result.date));
   setSelectValue(elements.companyInput, result.company);
   setSelectValue(elements.categoryInput, result.category);
   setSelectValue(elements.bankInput, result.bank);
+  applyExpenseFinancialFields(result);
   setInputValue(elements.paymentCodeInput, result.payment_code);
   setInputValue(elements.clientInvoiceInput, result.client_invoice);
+}
+
+function applyIncomeAutoFillResult(result) {
+  setInputValue(elements.dateInput, normalizeDate(result.date));
+  setSelectValue(elements.companyInput, result.company);
+  setNewStructureRootFromCategory(result.category);
+  syncStampCategoryOptions();
+  setSelectValue(elements.categoryInput, result.category);
+  clearInputValue(elements.incomeAmountInput);
+  setInputValue(elements.incomeAmountInput, result.amount);
+  clearInputValue(elements.incomePaymentTypeInput);
+  setSelectValue(elements.incomePaymentTypeInput, result.payment_type);
+}
+
+function applyStatementsAutoFillResult(result) {
+  setInputValue(elements.dateInput, normalizeDate(result.date));
+  setSelectValue(elements.companyInput, result.company);
+  setInputValue(elements.paymentCodeInput, result.suggested_title);
+}
+
+function applyExpenseFinancialFields(result) {
+  if (!currentStampRootIsExpenses()) {
+    clearInputValue(elements.newBankInput);
+    clearInputValue(elements.accountTypeInput);
+    clearInputValue(elements.accountNumberInput);
+    return;
+  }
+
+  const confidence = result.confidence || {};
+  clearInputValue(elements.newBankInput);
+  clearInputValue(elements.accountTypeInput);
+  clearInputValue(elements.accountNumberInput);
+
+  if (confidence.bank >= 0.65) {
+    setInputValue(elements.newBankInput, stampBankToTemplateBank(result.bank));
+  }
+
+  if (confidence.account_type >= 0.65) {
+    setSelectValue(elements.accountTypeInput, result.account_type);
+  }
 }
 
 function setInputValue(input, value) {
   const nextValue = String(value || "").trim();
   if (nextValue) input.value = nextValue;
+}
+
+function clearInputValue(input) {
+  input.value = "";
 }
 
 function setSelectValue(select, value) {
@@ -422,7 +639,53 @@ function formatFileSize(bytes) {
 }
 
 function populateSelect(select, options) {
-  select.innerHTML = options.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("");
+  select.innerHTML = options.map((item) => {
+    const value = String(item ?? "");
+    const label = value || NOT_IDENTIFIED_FOLDER;
+    return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+function populateSelectWithPreservedValue(select, options) {
+  const previousValue = select.value;
+  const uniqueOptions = Array.from(new Set(options));
+  populateSelect(select, uniqueOptions);
+  if (uniqueOptions.includes(previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+function populateAccountNumberOptions(options) {
+  accountNumberFolderOptions = Array.from(new Set(options.map(lastFourDigits).filter((value) => /^\d{4}$/.test(value))));
+  renderAccountNumberOptions();
+}
+
+function renderAccountNumberOptions() {
+  const input = elements.accountNumberInput;
+  const query = lastFourDigits(input.value);
+  const visibleOptions = accountNumberFolderOptions.filter((option) => !query || option.includes(query));
+  elements.accountNumberOptions.innerHTML = visibleOptions
+    .map((option) => `
+      <li>
+        <button type="button" data-account-number="${escapeHtml(option)}">${escapeHtml(option)}</button>
+      </li>
+    `)
+    .join("");
+  elements.accountNumberOptions.hidden = document.activeElement !== input || !visibleOptions.length;
+}
+
+function hideAccountNumberOptions() {
+  elements.accountNumberOptions.hidden = true;
+}
+
+function lastFourDigits(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 4);
+}
+
+function closeAccountNumberOptionsOnOutsidePointer(event) {
+  if (!elements.accountNumberField.contains(event.target)) {
+    hideAccountNumberOptions();
+  }
 }
 
 async function toggleMicrosoft() {
@@ -482,6 +745,9 @@ function renderAuthState() {
   elements.mainPanel.hidden = !connected;
   elements.connectPanel.hidden = connected;
   syncInvoiceReaderAuth();
+  if (connected) {
+    void discoverSharePointCompanyFolders().then(refreshStampFolderControls).catch(() => {});
+  }
   window.lucide?.createIcons();
 }
 
@@ -495,10 +761,31 @@ async function processAndUploadInvoice() {
     if (!queuedFiles.length) throw new Error("Select or drop at least one invoice first.");
 
     const date = parseIsoDate(elements.dateInput.value);
+    assertAllowedUploadDate(date);
+    const category = currentStampEffectiveCategory();
+    if (!category) throw new Error("Select a folder and category first.");
+    const isDocuments = currentStampRootIsDocuments();
+    const isExpenses = currentStampRootIsExpenses();
+    const isIncome = currentStampRootIsIncome();
+    const isStatements = currentStampRootIsStatements();
     const paymentCode = elements.paymentCodeInput.value.trim();
     const clientInvoice = elements.clientInvoiceInput.value.trim();
-    if (!paymentCode) throw new Error("Payment Code is required.");
-    if (!clientInvoice) throw new Error("Client Invoice is required.");
+    const incomeAmount = elements.incomeAmountInput.value.trim();
+    const incomePaymentType = elements.incomePaymentTypeInput.value.trim();
+    const suggestedTitle = paymentCode;
+    const description = clientInvoice;
+    if (isDocuments) {
+      if (!suggestedTitle) throw new Error("Suggested title is required.");
+      if (!description) throw new Error("Description is required.");
+    } else if (isStatements) {
+      if (!suggestedTitle) throw new Error("Suggested file name is required.");
+    } else if (isExpenses) {
+      if (!paymentCode) throw new Error("Payment Code is required.");
+      if (!clientInvoice) throw new Error("Client Invoice is required.");
+    } else if (isIncome) {
+      if (!incomeAmount) throw new Error("Monto is required.");
+      if (!incomePaymentType) throw new Error("Payment type is required.");
+    }
 
     const filesToProcess = [...queuedFiles];
     const sourcePdfs = [];
@@ -514,32 +801,57 @@ async function processAndUploadInvoice() {
       date: elements.dateInput.value,
       paymentCode,
       clientInvoice,
+      stampType: isExpenses ? "paid" : "processed",
+      title: isDocuments ? suggestedTitle : "",
+      description: isDocuments ? description : "",
     });
 
-    const fileName = buildStampedFileName({ paymentCode, clientInvoice, date });
-    const { bankTargetPath, categoryTargetPath, bankFolderPath, categoryFolderPath } = buildTargetPaths({
+    const initialFileName = isDocuments
+      ? buildDocumentsFileName({ suggestedTitle })
+      : isStatements
+        ? buildDocumentsFileName({ suggestedTitle })
+        : isExpenses
+          ? buildStampedFileName({ paymentCode, clientInvoice, date })
+          : buildGeneralStampedFileName({ category, date });
+    const useNewFolderStructure = stampUsesNewFolderStructure();
+    if (!useNewFolderStructure) {
+      throw new Error("Uploads must use the new folder structure.");
+    }
+    const targetPaths = buildTargetPaths({
       company: elements.companyInput.value,
-      bank: elements.bankInput.value,
-      category: elements.categoryInput.value,
+      bank: currentStampBankValue(),
+      accountType: elements.accountTypeInput.value,
+      accountNumber: elements.accountNumberInput.value,
+      incomePaymentType,
+      category,
       date,
-      fileName,
+      fileName: initialFileName,
+      useNewFolderStructure,
     });
+    const fileName = isStatements
+      ? await uniqueSharePointFileName(targetPaths.folderPaths[0], initialFileName)
+      : initialFileName;
+    if (fileName !== initialFileName) {
+      targetPaths.targetPaths = targetPaths.targetPaths.map((targetPath) => replaceSharePointFileName(targetPath, fileName));
+      targetPaths.uploadTargetPath = targetPaths.targetPaths[0];
+    }
 
     // Accounting folders may be created only after the user sees exactly what is missing and approves it.
     // Never create SharePoint accounting folders silently from the stamping flow.
-    await ensureSharePointFolderPath(bankFolderPath, { confirmCreate: confirmSharePointFolderCreation });
-    await ensureSharePointFolderPath(categoryFolderPath, { confirmCreate: confirmSharePointFolderCreation });
+    for (const folderPath of targetPaths.folderPaths) {
+      await ensureSharePointFolderPath(folderPath, { confirmCreate: confirmSharePointFolderCreation });
+    }
 
     showFlash("Uploading combined PDF to SharePoint...", "info");
-    await uploadSharePointFile(bankTargetPath, stampedBytes, "application/pdf");
-    await uploadSharePointFile(categoryTargetPath, stampedBytes, "application/pdf");
+    for (const targetPath of targetPaths.targetPaths) {
+      await uploadSharePointFile(targetPath, stampedBytes, "application/pdf");
+    }
 
     if (state.stampedBlobUrl) URL.revokeObjectURL(state.stampedBlobUrl);
     state.stampedBlobUrl = downloadBlobUrl(stampedBytes, "application/pdf");
     elements.downloadLink.href = state.stampedBlobUrl;
     elements.downloadLink.download = fileName;
-    elements.bankPathOutput.textContent = bankTargetPath;
-    elements.categoryPathOutput.textContent = categoryTargetPath;
+    renderStampResultPaths(targetPaths);
     elements.stampResult.hidden = false;
     queuedFiles = [];
     renderUploadQueue();
@@ -550,9 +862,62 @@ async function processAndUploadInvoice() {
   }
 }
 
+function assertAllowedUploadDate(date) {
+  if (date < NEW_STRUCTURE_MIN_UPLOAD_DATE) {
+    throw new Error("Uploads are blocked for dates before July 1, 2026.");
+  }
+}
+
 function buildStampedFileName({ paymentCode, clientInvoice, date }) {
   const baseName = `P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
   return `${baseName}.pdf`;
+}
+
+function buildDocumentsFileName({ suggestedTitle }) {
+  return `${sanitizeFilename(suggestedTitle, "document")}.pdf`;
+}
+
+function buildGeneralStampedFileName({ category, date }) {
+  const root = currentStampFolderRoot() || "document";
+  const label = stampCategoryLabel(category) || category || root;
+  return `${sanitizeFilename(root)}_${sanitizeFilename(label)}_${yyyymmdd(date)}.pdf`;
+}
+
+async function uniqueSharePointFileName(folderPath, fileName) {
+  const existingNames = new Set((await listSharePointFileNames(folderPath)).map((name) => name.toLowerCase()));
+  const extension = fileName.match(/(\.[^.]+)$/)?.[1] || "";
+  const baseName = extension ? fileName.slice(0, -extension.length) : fileName;
+  let candidate = fileName;
+  let counter = 2;
+  while (existingNames.has(candidate.toLowerCase())) {
+    candidate = `${baseName} (${counter})${extension}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function replaceSharePointFileName(path, fileName) {
+  const parts = String(path || "").split("/");
+  parts[parts.length - 1] = fileName;
+  return parts.join("/");
+}
+
+function renderStampResultPaths(targetPaths) {
+  if (targetPaths.mode === "new") {
+    elements.bankPathLabel.textContent = "Upload path";
+    elements.bankPathOutput.textContent = targetPaths.uploadTargetPath;
+    elements.categoryPathLabel.hidden = true;
+    elements.categoryPathOutput.hidden = true;
+    elements.categoryPathOutput.textContent = "";
+    return;
+  }
+
+  elements.bankPathLabel.textContent = "Bank folder";
+  elements.bankPathOutput.textContent = targetPaths.bankTargetPath;
+  elements.categoryPathLabel.textContent = "Category folder";
+  elements.categoryPathOutput.textContent = targetPaths.categoryTargetPath;
+  elements.categoryPathLabel.hidden = false;
+  elements.categoryPathOutput.hidden = false;
 }
 
 function confirmSharePointFolderCreation({ fullPath, missingPath, missingParts, lastExistingPath }) {
@@ -587,23 +952,361 @@ function closeFolderCreationDialog(confirmed) {
   }, 140);
 }
 
-function buildTargetPaths({ company, bank, category, date, fileName }) {
+function stampUsesNewFolderStructure() {
+  return elements.folderStructureInput.checked;
+}
+
+function currentStampCategories() {
+  if (!stampUsesNewFolderStructure()) return CATEGORIES;
+  const root = currentStampFolderRoot();
+  if (!root) return [];
+  return NEW_STRUCTURE_STAMP_CATEGORIES.filter((category) => newStructureRootForCategory(category) === root);
+}
+
+function restoreStampFolderStructurePreference() {
+  const stored = localStorage.getItem("stampFolderStructure");
+  elements.folderStructureInput.checked = stored !== "legacy";
+  elements.folderStructureLegacyInput.checked = stored === "legacy";
+}
+
+function syncStampCategoryOptions() {
+  const previousValue = elements.categoryInput.value;
+  const categories = currentStampCategories();
+  populateStampCategorySelect(categories);
+  if (currentStampRootIsStatements() && categories.includes("Statements")) {
+    elements.categoryInput.value = "Statements";
+  } else if (categories.includes(previousValue)) {
+    elements.categoryInput.value = previousValue;
+  }
+  syncStampFolderControlVisibility();
+  syncStampMetadataFields();
+}
+
+function populateStampCategorySelect(categories) {
+  const options = categories
+    .map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(stampCategoryLabel(category))}</option>`);
+  if (stampUsesNewFolderStructure()) {
+    const placeholder = currentStampFolderRoot() ? "Select category" : "Select a folder first";
+    options.unshift(`<option value="">${placeholder}</option>`);
+  }
+  elements.categoryInput.innerHTML = options.join("");
+}
+
+function stampCategoryLabel(category) {
+  if (!stampUsesNewFolderStructure()) return category;
+  const relPath = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category] || [];
+  return relPath.slice(1).join(" - ") || category;
+}
+
+function currentStampBankValue() {
+  return stampUsesNewFolderStructure() ? elements.newBankInput.value : elements.bankInput.value;
+}
+
+function currentStampFolderRoot() {
+  return elements.newFolderRootInputs.find((input) => input.checked)?.value || "";
+}
+
+function currentStampEffectiveCategory() {
+  if (currentStampRootIsStatements()) return "Statements";
+  return elements.categoryInput.value;
+}
+
+function resetStampFolderRoot() {
+  elements.newFolderRootNoneInput.checked = true;
+  syncStampCategoryOptions();
+}
+
+function setNewStructureRootFromCategory(category) {
+  const root = newStructureRootForCategory(category);
+  if (root && NEW_STRUCTURE_FOLDER_ROOTS.includes(root)) {
+    elements.newFolderRootInputs.forEach((input) => {
+      input.checked = input.value === root;
+    });
+  }
+}
+
+function syncStampFolderControlVisibility() {
+  const newMode = stampUsesNewFolderStructure();
+  const category = elements.categoryInput.value;
+  const root = currentStampFolderRoot();
+  const hasNewRoot = !newMode || Boolean(root);
+  const isDocuments = newMode && root === "Documents";
+  const isExpenses = newMode && root === "Expenses";
+  const isIncome = newMode && root === "Income";
+  const isStatements = newMode && root === "Statements";
+  const needsBank = newMode && newStructureCategoryNeedsBank(category);
+  const needsAccount = newMode && newStructureCategoryNeedsAccount(category);
+
+  elements.stampForm.classList.toggle("is-expenses-root", isExpenses);
+  elements.stampForm.classList.toggle("is-income-root", isIncome);
+  elements.dateInput.closest(".field").hidden = !hasNewRoot;
+  elements.dateInput.required = hasNewRoot;
+  elements.companyInput.closest(".field").hidden = !hasNewRoot;
+  elements.companyInput.required = hasNewRoot;
+  elements.categoryInput.closest(".field").hidden = !hasNewRoot || isStatements;
+  elements.categoryInput.required = hasNewRoot && !isStatements;
+  elements.bankInput.closest(".field").hidden = newMode;
+  elements.bankInput.required = !newMode;
+  elements.newFolderRootField.hidden = !newMode;
+  elements.newFolderRootInputs.forEach((input) => {
+    input.required = newMode;
+  });
+  elements.newBankField.hidden = !isExpenses || !needsBank;
+  elements.accountTypeField.hidden = !isExpenses || !needsAccount;
+  elements.accountNumberField.hidden = !isExpenses || !needsAccount;
+  elements.incomeAmountField.hidden = !isIncome;
+  elements.incomePaymentTypeField.hidden = !isIncome;
+  syncAutoFillButtonState();
+  syncStampMetadataFields();
+}
+
+function syncAutoFillButtonState() {
+  const hasReadableFiles = queuedFiles.length > 0;
+  const hasRequiredFolder = !stampUsesNewFolderStructure() || Boolean(currentStampFolderRoot());
+  elements.autofillBtn.disabled = autoFillInProgress || !hasReadableFiles || !hasRequiredFolder;
+}
+
+function syncStampMetadataFields() {
+  const isDocuments = currentStampRootIsDocuments();
+  const isExpenses = currentStampRootIsExpenses();
+  const isIncome = currentStampRootIsIncome();
+  const isStatements = currentStampRootIsStatements();
+  const showTitleField = isDocuments || isExpenses || isStatements;
+  const showDescriptionField = isDocuments || isExpenses;
+  elements.stampForm.classList.toggle("is-documents-mode", isDocuments);
+  elements.paymentCodeInput.closest(".field").hidden = !showTitleField;
+  elements.clientInvoiceInput.closest(".field").hidden = !showDescriptionField;
+  elements.paymentCodeInput.required = showTitleField;
+  elements.clientInvoiceInput.required = showDescriptionField;
+  elements.incomeAmountInput.required = isIncome;
+  elements.incomePaymentTypeInput.required = isIncome;
+  elements.paymentCodeLabel.textContent = isDocuments || isStatements ? "Suggested file name" : "Payment Code";
+  elements.clientInvoiceLabel.textContent = isDocuments ? "Description" : "Client Invoice";
+  elements.paymentCodeInput.placeholder = isDocuments || isStatements ? "Final PDF title" : "";
+  elements.clientInvoiceInput.placeholder = isDocuments ? "PDF subject metadata" : "";
+}
+
+function currentStampRootIsDocuments() {
+  return stampUsesNewFolderStructure() && currentStampFolderRoot() === "Documents";
+}
+
+function currentStampRootIsExpenses() {
+  return !stampUsesNewFolderStructure() || currentStampFolderRoot() === "Expenses";
+}
+
+function currentStampRootIsIncome() {
+  return stampUsesNewFolderStructure() && currentStampFolderRoot() === "Income";
+}
+
+function currentStampRootIsStatements() {
+  return stampUsesNewFolderStructure() && currentStampFolderRoot() === "Statements";
+}
+
+async function refreshStampFolderControls() {
+  syncStampFolderControlVisibility();
+  if (!stampUsesNewFolderStructure() || !state.graphToken) return;
+
+  const requestId = ++stampFolderOptionsRequestId;
+  const category = currentStampEffectiveCategory();
+  if (!category) return;
+  const basePath = newStructureCategoryBasePath({
+    company: elements.companyInput.value,
+    category,
+    date: parseIsoDate(elements.dateInput.value),
+  });
+  if (!basePath) return;
+
+  if (newStructureCategoryNeedsBank(category)) {
+    const bankOptions = await listSharePointFolders(basePath);
+    if (requestId !== stampFolderOptionsRequestId) return;
+    populateSelectWithPreservedValue(elements.newBankInput, withCommonFolderOptions(bankOptions, templateBankOptions()));
+  }
+
+  if (!newStructureCategoryNeedsAccount(category)) return;
+
+  const bank = normalizeFolderLevel(elements.newBankInput.value);
+  if (bank && bank !== NOT_IDENTIFIED_FOLDER) {
+    const typeOptions = await listSharePointFolders(joinSharePointPath(basePath, bank));
+    if (requestId !== stampFolderOptionsRequestId) return;
+    populateSelectWithPreservedValue(elements.accountTypeInput, withCommonFolderOptions(typeOptions, ["debit", "credit"]));
+  } else {
+    populateSelectWithPreservedValue(elements.accountTypeInput, withCommonFolderOptions([], ["debit", "credit"]));
+  }
+
+  const accountType = normalizeFolderLevel(elements.accountTypeInput.value);
+  if (bank && bank !== NOT_IDENTIFIED_FOLDER && accountType && accountType !== NOT_IDENTIFIED_FOLDER) {
+    const accountOptions = await listSharePointFolders(joinSharePointPath(basePath, bank, accountType));
+    if (requestId !== stampFolderOptionsRequestId) return;
+    populateAccountNumberOptions(withCommonFolderOptions(accountOptions, []));
+  } else {
+    populateAccountNumberOptions([NOT_IDENTIFIED_FOLDER]);
+  }
+}
+
+function withCommonFolderOptions(existingOptions, commonOptions) {
+  return ["", ...existingOptions, ...commonOptions];
+}
+
+function templateBankOptions() {
+  const workbookBanks = templateBankAccounts.map((account) => account.bank).filter(Boolean);
+  return workbookBanks.length ? Array.from(new Set(workbookBanks)) : TEMPLATE_BANKS;
+}
+
+async function discoverSharePointCompanyFolders() {
+  if (discoveredCompanyFolders || !state.graphToken) return;
+  discoveredCompanyFolders = true;
+
+  const generalFolders = await listSharePointFolders("General");
+  const dtechFolder = generalFolders.find((name) => /d[\s-]*t[\s-]*e?[\s-]*c[\s-]*h/i.test(name));
+  if (!dtechFolder) return;
+
+  const dtechRoot = await resolveCompanyAccountantRoot(dtechFolder);
+  addCompanyOption(dtechFolder, dtechRoot);
+}
+
+async function resolveCompanyAccountantRoot(companyFolderName) {
+  const companyPath = joinSharePointPath("General", companyFolderName);
+  const children = await listSharePointFolders(companyPath);
+  const accountantFolder = children.find((name) => /documents?\s*account|accountant/i.test(name));
+  return accountantFolder ? joinSharePointPath(companyPath, accountantFolder) : companyPath;
+}
+
+function addCompanyOption(company, companyRoot) {
+  if (!company || !companyRoot) return;
+  COMPANY_SHAREPOINT_DIRS[company] = companyRoot;
+  if (!COMPANIES.includes(company)) {
+    COMPANIES.push(company);
+  }
+  repopulateCompanySelect(elements.companyInput);
+  repopulateCompanySelect(elements.templateCompanyInput);
+}
+
+function repopulateCompanySelect(select) {
+  const previousValue = select.value;
+  populateSelect(select, COMPANIES);
+  if (COMPANIES.includes(previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+function buildTargetPaths({ company, bank, accountType, accountNumber, incomePaymentType, category, date, fileName, useNewFolderStructure }) {
   const companyRoot = COMPANY_SHAREPOINT_DIRS[company];
+  if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
+
+  const monthRoot = joinSharePointPath(companyRoot, String(date.getFullYear()), `${date.getMonth() + 1} ${monthName(date)}`);
+  if (useNewFolderStructure) {
+    return buildNewStructureTargetPaths({ bank, accountType, accountNumber, incomePaymentType, category, monthRoot, fileName });
+  }
+
   const bankRel = BANK_TO_CHECKINGS_DIR[bank];
   const categoryRel = CATEGORY_TO_MONTH_REL_PATH[category];
-  if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
   if (!bankRel) throw new Error(`Bank has no mapping: ${bank}`);
   if (!categoryRel) throw new Error(`Category has no mapping: ${category}`);
 
-  const monthRoot = joinSharePointPath(companyRoot, String(date.getFullYear()), `${date.getMonth() + 1} ${monthName(date)}`);
   const bankFolderPath = joinSharePointPath(monthRoot, "2 Bank Transactions", bankRel, "Direct Payments");
   const categoryFolderPath = joinSharePointPath(monthRoot, ...categoryRel);
+  const bankTargetPath = joinSharePointPath(bankFolderPath, fileName);
+  const categoryTargetPath = joinSharePointPath(categoryFolderPath, fileName);
   return {
+    mode: "legacy",
     bankFolderPath,
     categoryFolderPath,
-    bankTargetPath: joinSharePointPath(bankFolderPath, fileName),
-    categoryTargetPath: joinSharePointPath(categoryFolderPath, fileName),
+    bankTargetPath,
+    categoryTargetPath,
+    folderPaths: [bankFolderPath, categoryFolderPath],
+    targetPaths: [bankTargetPath, categoryTargetPath],
   };
+}
+
+function buildNewStructureTargetPaths({ bank, accountType, accountNumber, incomePaymentType, category, monthRoot, fileName }) {
+  const categoryRel = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category];
+  if (!categoryRel) throw new Error(`Category has no new folder structure mapping: ${category}`);
+
+  const categoryFolderPath = joinSharePointPath(monthRoot, ...categoryRel);
+  if (newStructureCategoryNeedsPaymentType(category)) {
+    return singleNewStructureTarget(joinSharePointPath(categoryFolderPath, normalizeFolderLevel(incomePaymentType)), fileName);
+  }
+
+  if (!newStructureCategoryNeedsAccount(category)) {
+    return singleNewStructureTarget(categoryFolderPath, fileName);
+  }
+
+  return singleNewStructureTarget(buildAccountScopedFolderPath({
+    basePath: categoryFolderPath,
+    bank,
+    accountType,
+    accountNumber,
+  }), fileName);
+}
+
+function singleNewStructureTarget(folderPath, fileName) {
+  const targetPath = joinSharePointPath(folderPath, fileName);
+  return {
+    mode: "new",
+    uploadFolderPath: folderPath,
+    uploadTargetPath: targetPath,
+    folderPaths: [folderPath],
+    targetPaths: [targetPath],
+  };
+}
+
+function newStructureCategoryNeedsAccount(category) {
+  const relPath = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category] || [];
+  return relPath[0] === "Expenses";
+}
+
+function newStructureRootForCategory(category) {
+  const relPath = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category] || [];
+  return relPath[0] || "";
+}
+
+function newStructureCategoryNeedsBank(category) {
+  return newStructureCategoryNeedsAccount(category);
+}
+
+function newStructureCategoryNeedsPaymentType(category) {
+  const relPath = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category] || [];
+  return relPath[0] === "Income" && relPath[1] === "Transactions";
+}
+
+function newStructureCategoryBasePath({ company, category, date }) {
+  const companyRoot = COMPANY_SHAREPOINT_DIRS[company];
+  const categoryRel = NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH[category];
+  if (!companyRoot || !categoryRel || !date) return "";
+  const monthRoot = joinSharePointPath(companyRoot, String(date.getFullYear()), `${date.getMonth() + 1} ${monthName(date)}`);
+  return joinSharePointPath(monthRoot, ...categoryRel);
+}
+
+function buildAccountScopedFolderPath({ basePath, bank, accountType, accountNumber }) {
+  const bankFolder = normalizeFolderLevel(bank);
+  if (bankFolder === NOT_IDENTIFIED_FOLDER) {
+    return joinSharePointPath(basePath, NOT_IDENTIFIED_FOLDER);
+  }
+
+  const typeFolder = normalizeFolderLevel(accountType);
+  if (typeFolder === NOT_IDENTIFIED_FOLDER) {
+    return joinSharePointPath(basePath, bankFolder, NOT_IDENTIFIED_FOLDER);
+  }
+
+  return joinSharePointPath(basePath, bankFolder, typeFolder, normalizeAccountFolder(accountNumber));
+}
+
+function stampBankToTemplateBank(bank) {
+  return STAMP_BANK_TO_TEMPLATE_BANK[bank] || bank;
+}
+
+function normalizeFolderLevel(value) {
+  const text = String(value || "").trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ");
+  return text || NOT_IDENTIFIED_FOLDER;
+}
+
+function normalizeAccountFolder(value) {
+  const digits = lastFourDigits(value);
+  if (!digits) return NOT_IDENTIFIED_FOLDER;
+  if (!/^\d{4}$/.test(digits)) {
+    throw new Error("Last four numbers of the card must be exactly 4 digits.");
+  }
+  return `N${digits}`;
 }
 
 function renderFolderTemplate() {
@@ -775,7 +1478,7 @@ function buildIncomeTemplate(accounts) {
       "Invoices",
       {
         name: "Transactions",
-        children: uniqueBankNodes(accounts),
+        children: ["Cheque", "Cash"],
       },
     ],
   };
@@ -808,13 +1511,6 @@ function accountTree(accounts) {
           children: Array.from(new Set(last4List.filter(Boolean))).sort().map((last4) => ({ name: last4, children: [] })),
         })),
     }));
-}
-
-function uniqueBankNodes(accounts) {
-  const banks = Array.from(new Set(accounts.map((account) => account.bank).filter(Boolean))).sort((left, right) => (
-    left.localeCompare(right, undefined, { numeric: true })
-  ));
-  return banks;
 }
 
 function renderTemplateNode(node, isRoot = false) {
@@ -871,6 +1567,11 @@ async function loadCloudTemplateBankWorkbook() {
     renderFolderTemplate();
     throw new Error(`Bank accounts workbook is empty or has no valid rows: ${BANK_ACCOUNTS_WORKBOOK_PATH}`);
   }
+}
+
+async function ensureFolderTemplateBankAccountsLoaded() {
+  if (templateBankAccounts.length) return;
+  await loadCloudTemplateBankWorkbook();
 }
 
 function isCsvNotFoundError(error) {

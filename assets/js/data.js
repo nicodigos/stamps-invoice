@@ -9,6 +9,7 @@ export const COMPANIES = [
   "16021166 Canada Inc-Diego-Chacho",
   "9359-6633 QUEBEC INC",
   "9390-9216 QUEBEC INC",
+  "D-TECH CONSTRUCTION",
   "TAYANTI-CANADA",
 ];
 
@@ -42,6 +43,7 @@ export const COMPANY_SHAREPOINT_DIRS = {
   "16021166 Canada Inc-Diego-Chacho": "General/16021166 Canada Inc-Diego-Chacho/Documents Accountant",
   "9359-6633 QUEBEC INC": "General/9359-6633 QUEBEC INC/02-Document Accountant",
   "9390-9216 QUEBEC INC": "General/9390-9216 QUEBEC INC/02-Documents accountant 9390-9216",
+  "D-TECH CONSTRUCTION": "General/D-TECH CONSTRUCTION/Documents Accountant",
   "TAYANTI-CANADA": "General/TAYANTI-CANADA/01-Documents Accountant Tayanti",
 };
 
@@ -66,6 +68,12 @@ export const CATEGORY_TO_MONTH_REL_PATH = {
   "8 Expenses - Professional": ["8 Expenses", "Professional"],
   "9 Reimbursements - OP": ["9 Reimbursements", "OP"],
   "9 Reimbursements - Reimbursements": ["9 Reimbursements", "Reimbursements"],
+};
+
+export const STAMP_BANK_TO_TEMPLATE_BANK = {
+  "National Bank": "National",
+  "Scotia Bank": "Scotiabank",
+  "Desjardins": "Desjardin",
 };
 
 export const TEMPLATE_MONTHS = [
@@ -117,3 +125,49 @@ export const EXPENSE_CATEGORIES = [
   "QST Payable",
   "QST Suspense",
 ];
+
+export const NEW_STRUCTURE_STAMP_CATEGORIES = [
+  "Income - Invoices",
+  "Income - Transactions",
+  "Statements",
+  ...EXPENSE_CATEGORIES,
+  "Documents - Reimbursements - OP",
+  "Documents - Reimbursements - Reimbursements",
+  "Documents - Tax Remittances - GST HST",
+  "Documents - Tax Remittances - Payroll Remittances",
+  "Documents - Tax Remittances - QST",
+  "Documents - Work Safety - CNESST QC",
+  "Documents - Work Safety - WCB NB",
+  "Documents - Work Safety - WCB NS",
+  "Documents - Work Safety - WCB PEI",
+  "Documents - Work Safety - WSIB ON",
+  "Documents - Comite Paritario",
+  "Documents - Investment Land",
+  "Documents - Letters Received",
+  "Documents - Union",
+  "Documents - Xoom Investment",
+];
+
+export const NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH = Object.fromEntries([
+  ["Income - Invoices", ["Income", "Invoices"]],
+  ["Income - Transactions", ["Income", "Transactions"]],
+  ["Statements", ["Statements"]],
+  ...EXPENSE_CATEGORIES.map((category) => [category, ["Expenses", category]]),
+  ["Documents - Reimbursements - OP", ["Documents", "Reimbursements", "OP"]],
+  ["Documents - Reimbursements - Reimbursements", ["Documents", "Reimbursements", "Reimbursements"]],
+  ["Documents - Tax Remittances - GST HST", ["Documents", "Tax Remittances", "GST HST"]],
+  ["Documents - Tax Remittances - Payroll Remittances", ["Documents", "Tax Remittances", "Payroll Remittances"]],
+  ["Documents - Tax Remittances - QST", ["Documents", "Tax Remittances", "QST"]],
+  ["Documents - Work Safety - CNESST QC", ["Documents", "Work Safety", "CNESST QC"]],
+  ["Documents - Work Safety - WCB NB", ["Documents", "Work Safety", "WCB NB"]],
+  ["Documents - Work Safety - WCB NS", ["Documents", "Work Safety", "WCB NS"]],
+  ["Documents - Work Safety - WCB PEI", ["Documents", "Work Safety", "WCB PEI"]],
+  ["Documents - Work Safety - WSIB ON", ["Documents", "Work Safety", "WSIB ON"]],
+  ["Documents - Comite Paritario", ["Documents", "Comite Paritario"]],
+  ["Documents - Investment Land", ["Documents", "Investment Land"]],
+  ["Documents - Letters Received", ["Documents", "Letters Received"]],
+  ["Documents - Union", ["Documents", "Union"]],
+  ["Documents - Xoom Investment", ["Documents", "Xoom Investment"]],
+]);
+
+export const NEW_STRUCTURE_FOLDER_ROOTS = ["Documents", "Expenses", "Income", "Statements"];

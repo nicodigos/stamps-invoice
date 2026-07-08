@@ -61,26 +61,54 @@ function normalizeOptions(options) {
     companies: Array.isArray(options?.companies) ? options.companies.map(String) : [],
     banks: Array.isArray(options?.banks) ? options.banks.map(String) : [],
     categories: Array.isArray(options?.categories) ? options.categories.map(String) : [],
+    folderStructure: options?.folderStructure === "legacy" ? "legacy" : "new",
+    folderRoot: normalizeFolderRoot(options?.folderRoot, options?.folderStructure),
+    newStructureCategoryPaths: normalizeCategoryPaths(options?.newStructureCategoryPaths),
   };
 }
 
+function normalizeFolderRoot(value, folderStructure) {
+  if (folderStructure === "legacy") return "Expenses";
+  const root = String(value || "").trim();
+  return ["Documents", "Expenses", "Income", "Statements"].includes(root) ? root : "";
+}
+
+function normalizeCategoryPaths(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).map(([key, path]) => [
+    String(key),
+    Array.isArray(path) ? path.map(String) : [],
+  ]));
+}
+
 async function classifyStampFields({ emailContexts, visionPages, options, apiKey }) {
+  const workflowInstructions = workflowPrompt(options.folderRoot);
+  const activeFields = workflowFields(options.folderRoot);
   const systemPrompt = [
     "You fill an invoice stamping form from email context and OCR.",
     "Return JSON only. Choose the closest available dropdown option even when text is not exact.",
     "Human will validate after you fill the form, so provide best suggestions rather than blanks when there is useful evidence.",
-    "Use empty string for bank only if no bank evidence exists.",
-    "payment_code and client_invoice should be short identifiers from visible payment/invoice/reference/period evidence.",
+    "Only fill fields for the selected folder workflow. Use empty string and 0 confidence for every field outside the selected workflow.",
+    "Description must be at most 300 characters. Suggested title must be short and filename-friendly.",
     "Use visual color evidence only after deciding a page/document is bank-related, such as a payment confirmation, transfer, deposit, bank transaction, or account document.",
     "For bank-related pages, colorHint maps as: light green means Desjardins, light blue means National Bank, red means Scotia Bank.",
     "Ignore colorHint for invoices, bills, receipts, supplier documents, or any page that does not appear to be from a bank.",
+    workflowInstructions,
   ].join(" ");
 
   const userPrompt = [
-    "Form fields to fill: date, company, category, bank, payment_code, client_invoice.",
+    `Selected workflow fields to fill: ${activeFields.join(", ")}.`,
+    "All other schema fields must be empty strings with confidence 0.",
     `Company options: ${options.companies.join(" | ")}`,
     `Category options: ${options.categories.join(" | ")}`,
     `Bank options: ${options.banks.join(" | ")}`,
+    "Account type options: debit | credit",
+    "Income payment_type options: Cheque | Cash",
+    `Folder structure mode: ${options.folderStructure}.`,
+    `Selected folder root: ${options.folderRoot || "none"}.`,
+    options.folderStructure === "new"
+      ? `Validate category against these generated-folder destinations: ${JSON.stringify(options.newStructureCategoryPaths).slice(0, 5000)}`
+      : "Legacy folder structure is active; use the legacy category names directly.",
     "Important mappings: T4A or PAGO T4A should map to 5 T4A Payments. 1001298527 ONTARIO should map to 1001298527 ONTARIO INC. Scotia should map to Scotia Bank.",
     "date must be YYYY-MM-DD when possible.",
     "First decide from OCR/email whether each page is bank-related or invoice-related. If bank text is weak or absent on a bank-related page, use first-page colorHint to choose the closest bank option. Do not use colorHint from non-bank pages.",
@@ -111,8 +139,14 @@ async function classifyStampFields({ emailContexts, visionPages, options, apiKey
               company: { type: "string" },
               category: { type: "string" },
               bank: { type: "string" },
+              account_type: { type: "string" },
+              account_last_four: { type: "string" },
               payment_code: { type: "string" },
               client_invoice: { type: "string" },
+              suggested_title: { type: "string" },
+              description: { type: "string" },
+              amount: { type: "string" },
+              payment_type: { type: "string" },
               notes: { type: "string" },
               confidence: {
                 type: "object",
@@ -122,13 +156,19 @@ async function classifyStampFields({ emailContexts, visionPages, options, apiKey
                   company: { type: "number" },
                   category: { type: "number" },
                   bank: { type: "number" },
+                  account_type: { type: "number" },
+                  account_last_four: { type: "number" },
                   payment_code: { type: "number" },
                   client_invoice: { type: "number" },
+                  suggested_title: { type: "number" },
+                  description: { type: "number" },
+                  amount: { type: "number" },
+                  payment_type: { type: "number" },
                 },
-                required: ["date", "company", "category", "bank", "payment_code", "client_invoice"],
+                required: ["date", "company", "category", "bank", "account_type", "account_last_four", "payment_code", "client_invoice", "suggested_title", "description", "amount", "payment_type"],
               },
             },
-            required: ["date", "company", "category", "bank", "payment_code", "client_invoice", "notes", "confidence"],
+            required: ["date", "company", "category", "bank", "account_type", "account_last_four", "payment_code", "client_invoice", "suggested_title", "description", "amount", "payment_type", "notes", "confidence"],
           },
         },
       },
@@ -145,15 +185,70 @@ async function classifyStampFields({ emailContexts, visionPages, options, apiKey
   return JSON.parse(payload.choices?.[0]?.message?.content || "{}");
 }
 
+function workflowFields(folderRoot) {
+  if (folderRoot === "Documents") return ["date", "company", "category", "suggested_title", "description"];
+  if (folderRoot === "Income") return ["date", "company", "category", "amount", "payment_type"];
+  if (folderRoot === "Statements") return ["date", "company", "suggested_title"];
+  return ["date", "company", "category", "bank", "account_type", "payment_code", "client_invoice"];
+}
+
+function workflowPrompt(folderRoot) {
+  if (folderRoot === "Documents") {
+    return [
+      "Documents workflow:",
+      "Detect date, company, and category from document OCR first; use email context only as fallback.",
+      "Generate description as a plain summary of what the document is, maximum 300 characters.",
+      "Generate suggested_title as a short title including sender/remitter and a quick idea of the document.",
+      "Do not fill Expenses, Income, or Statements fields.",
+    ].join(" ");
+  }
+
+  if (folderRoot === "Income") {
+    return [
+      "Income workflow:",
+      "Only try to identify company, category, amount, and payment_type.",
+      "Use the selected Date field for filing; if a clear income document date is visible, return it as date.",
+      "Amount should be the best visible received/deposit/invoice total as a short readable string.",
+      "Payment_type must be Cheque or Cash. Use Cheque only when cheque/check payment evidence is visible; use Cash only when cash evidence is visible; otherwise leave empty with low confidence.",
+      "Do not fill Documents, Expenses, or Statements fields.",
+    ].join(" ");
+  }
+
+  if (folderRoot === "Statements") {
+    return [
+      "Statements workflow:",
+      "Only try to identify date, company, and suggested_title.",
+      "Suggested_title should be a short appropriate filename title for the statement.",
+      "Do not fill Documents, Expenses, or Income fields.",
+    ].join(" ");
+  }
+
+  return [
+    "Expenses workflow:",
+    "Best-effort identify category and company.",
+    "The key fields are payment_code, client_invoice, and company; fill those carefully from visible payment, invoice, supplier, reference, or period evidence.",
+    "Detect bank and account_type only with good evidence; otherwise use empty string and low confidence.",
+    "Never fill account_last_four. Always return account_last_four as an empty string with confidence 0; the user will enter it manually if needed.",
+    "Keep using colorHint to infer bank only when the page appears bank-related.",
+    "Do not fill Documents, Income, or Statements fields.",
+  ].join(" ");
+}
+
 function normalizeClassification(raw, options) {
   const confidence = normalizeConfidence(raw.confidence);
   const out = {
     date: normalizeDate(raw.date),
     company: closestOption(raw.company, options.companies),
     category: closestOption(raw.category, options.categories),
-    bank: closestOption(raw.bank, options.banks, { allowEmpty: true }),
+    bank: confidence.bank >= 0.65 ? closestOption(raw.bank, options.banks, { allowEmpty: true }) : "",
+    account_type: confidence.account_type >= 0.65 ? closestOption(raw.account_type, ["debit", "credit"], { allowEmpty: true }) : "",
+    account_last_four: "",
     payment_code: sanitizeField(raw.payment_code),
     client_invoice: sanitizeField(raw.client_invoice),
+    suggested_title: sanitizeField(raw.suggested_title),
+    description: sanitizeDescription(raw.description),
+    amount: sanitizeAmount(raw.amount),
+    payment_type: confidence.payment_type >= 0.65 ? closestOption(raw.payment_type, ["Cheque", "Cash"], { allowEmpty: true }) : "",
     notes: String(raw.notes || "").trim().split(/\s+/).slice(0, 30).join(" "),
     confidence,
   };
@@ -175,8 +270,16 @@ function sanitizeField(value) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, 80);
 }
 
+function sanitizeDescription(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, 300);
+}
+
+function sanitizeAmount(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, 40);
+}
+
 function normalizeConfidence(value) {
-  const fields = ["date", "company", "category", "bank", "payment_code", "client_invoice"];
+  const fields = ["date", "company", "category", "bank", "account_type", "account_last_four", "payment_code", "client_invoice", "suggested_title", "description", "amount", "payment_type"];
   return Object.fromEntries(fields.map((field) => [field, clamp01(Number(value?.[field]) || 0)]));
 }
 

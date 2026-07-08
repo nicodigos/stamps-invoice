@@ -18,6 +18,7 @@ COMPANIES = [
     "16021166 Canada Inc-Diego-Chacho",
     "9359-6633 QUEBEC INC",
     "9390-9216 QUEBEC INC",
+    "D-TECH CONSTRUCTION",
     "TAYANTI-CANADA",
 ]
 
