@@ -39,7 +39,8 @@ export async function fileToAnalysisPayload(file, options = {}) {
     const parsed = await parseMessageFile(file, options);
     const images = [];
     for (const attachment of parsed.attachments) {
-      images.push(...await contentToAnalysisImages(attachment.bytes, attachment.name, attachment.name));
+      if (imageLimitReached(images, options)) break;
+      images.push(...await contentToAnalysisImages(attachment.bytes, attachment.name, attachment.name, remainingImageOptions(images, options)));
     }
     return {
       sourceName: file.name,
@@ -50,9 +51,9 @@ export async function fileToAnalysisPayload(file, options = {}) {
 
   return {
     sourceName: file.name,
-    email: null,
-    images: await contentToAnalysisImages(new Uint8Array(await file.arrayBuffer()), file.name, file.name),
-  };
+      email: null,
+      images: await contentToAnalysisImages(new Uint8Array(await file.arrayBuffer()), file.name, file.name, options),
+    };
 }
 
 export async function emailFileToPreview(file) {
@@ -342,10 +343,10 @@ async function imageBytesToThumbnailDataUrl(bytes, ext) {
   return canvas.toDataURL("image/png");
 }
 
-async function contentToAnalysisImages(bytes, name, label) {
+async function contentToAnalysisImages(bytes, name, label, options = {}) {
   const ext = extensionOf(name);
   if (PDF_EXTS.has(ext)) {
-    return renderPdfBytesToImages(bytes, label);
+    return renderPdfBytesToImages(bytes, label, options);
   }
   if (ZIP_EXTS.has(ext)) {
     const zip = await window.JSZip.loadAsync(bytes);
@@ -356,7 +357,8 @@ async function contentToAnalysisImages(bytes, name, label) {
     for (const entry of entries) {
       const entryExt = extensionOf(entry.name);
       if (!PDF_EXTS.has(entryExt) && !IMAGE_EXTS.has(entryExt)) continue;
-      images.push(...await contentToAnalysisImages(await entry.async("uint8array"), entry.name, entry.name));
+      if (imageLimitReached(images, options)) break;
+      images.push(...await contentToAnalysisImages(await entry.async("uint8array"), entry.name, entry.name, remainingImageOptions(images, options)));
     }
     return images;
   }
@@ -372,12 +374,13 @@ async function contentToAnalysisImages(bytes, name, label) {
   return [];
 }
 
-async function renderPdfBytesToImages(pdfBytes, sourceName) {
+async function renderPdfBytesToImages(pdfBytes, sourceName, options = {}) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
   const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice ? pdfBytes.slice() : pdfBytes });
   const pdf = await loadingTask.promise;
   const images = [];
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+  const pageLimit = Math.min(pdf.numPages, Number(options.maxImages) || pdf.numPages);
+  for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 2.2 });
     const canvas = document.createElement("canvas");
@@ -394,6 +397,17 @@ async function renderPdfBytesToImages(pdfBytes, sourceName) {
     });
   }
   return images;
+}
+
+function imageLimitReached(images, options) {
+  const maxImages = Number(options.maxImages) || 0;
+  return maxImages > 0 && images.length >= maxImages;
+}
+
+function remainingImageOptions(images, options) {
+  const maxImages = Number(options.maxImages) || 0;
+  if (!maxImages) return options;
+  return { ...options, maxImages: Math.max(0, maxImages - images.length) };
 }
 
 async function imageBytesToPngPayload(bytes, ext) {

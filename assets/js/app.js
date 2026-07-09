@@ -126,6 +126,7 @@ let autoFillInProgress = false;
 const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
 const NOT_IDENTIFIED_FOLDER = "Not Identified";
 const NEW_STRUCTURE_MIN_UPLOAD_DATE = new Date("2026-07-01T00:00:00");
+const MAX_AUTOFILL_ANALYSIS_IMAGES = 12;
 const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
 const TEMPLATE_ACCOUNT_TYPES = ["debit", "credit"];
 const EXPENSE_FILENAME_BANK_CODES = {
@@ -536,18 +537,28 @@ async function autoFillFromQueuedFiles() {
   try {
     const folderRoot = currentStampFolderRoot();
     const documents = [];
+    let remainingAnalysisImages = MAX_AUTOFILL_ANALYSIS_IMAGES;
     for (let index = 0; index < queuedFiles.length; index += 1) {
+      if (remainingAnalysisImages <= 0) break;
       const item = queuedFiles[index];
       const file = item.file;
       showFlash(`Preparing AI ${index + 1} of ${queuedFiles.length}: ${file.name}`, "info");
-      const payload = await fileToAnalysisPayload(file, emailProcessingOptions(item));
+      const payload = await fileToAnalysisPayload(file, {
+        ...emailProcessingOptions(item),
+        maxImages: remainingAnalysisImages,
+      });
       if (payload.images.length) {
         documents.push(payload);
+        remainingAnalysisImages -= payload.images.length;
       }
     }
 
     if (!documents.length) {
       throw new Error("No supported PDFs or images were found for analysis.");
+    }
+
+    if (remainingAnalysisImages <= 0) {
+      showFlash(`Auto-fill is reading the first ${MAX_AUTOFILL_ANALYSIS_IMAGES} pages/images to avoid timeouts.`, "info");
     }
 
     showFlash("Reading documents with Vision and GPT...", "info");

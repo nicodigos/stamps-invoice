@@ -1,5 +1,8 @@
 const { webcrypto } = require("node:crypto");
 
+const MAX_VISION_PAGES = 12;
+const VISION_CONCURRENCY = 4;
+
 exports.handler = async function handler(event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method not allowed" };
@@ -20,22 +23,35 @@ exports.handler = async function handler(event) {
     }
 
     const accessToken = await getGoogleAccessToken(parseJsonInput(googleJson, "GOOGLE_SERVICE_ACCOUNT_JSON"));
-    const visionPages = [];
+    const imagePages = [];
     for (const document of documents) {
       for (const image of document.images || []) {
-        const vision = await extractTextWithVision(image.imageBase64, accessToken);
-        visionPages.push({
+        imagePages.push({
           sourceName: image.sourceName || document.sourceName || "",
           pageNumber: image.pageNumber || 1,
           colorHint: image.colorHint || null,
-          fullText: vision.full_text || "",
+          imageBase64: image.imageBase64,
         });
       }
     }
 
-    if (!visionPages.length) {
+    if (!imagePages.length) {
       return { statusCode: 400, body: "No rendered images found for Vision." };
     }
+
+    const visionPages = await mapWithConcurrency(
+      imagePages.slice(0, MAX_VISION_PAGES),
+      VISION_CONCURRENCY,
+      async (image) => {
+        const vision = await extractTextWithVision(image.imageBase64, accessToken);
+        return {
+          sourceName: image.sourceName,
+          pageNumber: image.pageNumber,
+          colorHint: image.colorHint,
+          fullText: vision.full_text || "",
+        };
+      },
+    );
 
     const emailContexts = documents
       .filter((document) => document.email)
@@ -408,6 +424,20 @@ async function extractTextWithVision(imageBase64, accessToken) {
     throw new Error(`Google Vision error: ${JSON.stringify(payload)}`);
   }
   return { full_text: payload.responses?.[0]?.fullTextAnnotation?.text || "" };
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+  return results;
 }
 
 function parseJsonInput(text, label) {
