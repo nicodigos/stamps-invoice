@@ -9,6 +9,8 @@ const MESSAGE_EXTS = new Set([...EML_EXTS, ...MSG_EXTS]);
 const POSTAL_MIME_URL = "https://esm.sh/postal-mime@2.4.3";
 const MSG_READER_URL = "https://esm.sh/@kenjiuno/msgreader@1.28.0";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
+const ANALYSIS_MAX_DIMENSION = 1800;
+const ANALYSIS_PDF_MAX_SCALE = 1.6;
 
 export async function uploadedFileToPdfBytes(file, options = {}) {
   const pdfs = await uploadedFileToPdfByteList(file, options);
@@ -90,6 +92,34 @@ export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoi
   }
 
   return doc.save();
+}
+
+export async function assertValidPdfBytes(bytes, label = "PDF") {
+  const data = toUint8Array(bytes);
+  if (data.byteLength < 100) {
+    throw new Error(`${label} is empty or too small to be a valid PDF.`);
+  }
+
+  const header = new TextDecoder().decode(data.slice(0, 8));
+  if (!header.startsWith("%PDF-")) {
+    throw new Error(`${label} does not start with a valid PDF header.`);
+  }
+
+  let doc;
+  try {
+    doc = await window.PDFLib.PDFDocument.load(data);
+  } catch (error) {
+    throw new Error(`${label} could not be opened as a PDF: ${error.message || error}`);
+  }
+
+  if (doc.getPageCount() === 0) {
+    throw new Error(`${label} has no pages.`);
+  }
+
+  return {
+    byteLength: data.byteLength,
+    pageCount: doc.getPageCount(),
+  };
 }
 
 function drawCornerStamp(page, text, { font, color }) {
@@ -382,7 +412,13 @@ async function renderPdfBytesToImages(pdfBytes, sourceName, options = {}) {
   const pageLimit = Math.min(pdf.numPages, Number(options.maxImages) || pdf.numPages);
   for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2.2 });
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(
+      ANALYSIS_PDF_MAX_SCALE,
+      ANALYSIS_MAX_DIMENSION / baseViewport.width,
+      ANALYSIS_MAX_DIMENSION / baseViewport.height,
+    );
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     canvas.width = viewport.width;
@@ -413,27 +449,35 @@ function remainingImageOptions(images, options) {
 async function imageBytesToPngPayload(bytes, ext) {
   if (ext === ".png") {
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const canvas = resizedCanvasForBitmap(bitmap);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     return {
       colorHint: detectBankColorHint(canvas),
-      imageBase64: bytesToBase64(bytes),
+      imageBase64: await canvasToPngBase64(canvas),
     };
   }
   const blobType = ext === ".webp" ? "image/webp" : "image/jpeg";
   const bitmap = await createImageBitmap(new Blob([bytes], { type: blobType }));
-  const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext("2d").drawImage(bitmap, 0, 0);
-  const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!pngBlob) throw new Error("Could not prepare the image for AI.");
+  const canvas = resizedCanvasForBitmap(bitmap);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   return {
     colorHint: detectBankColorHint(canvas),
-    imageBase64: bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer())),
+    imageBase64: await canvasToPngBase64(canvas),
   };
+}
+
+function resizedCanvasForBitmap(bitmap) {
+  const scale = Math.min(ANALYSIS_MAX_DIMENSION / bitmap.width, ANALYSIS_MAX_DIMENSION / bitmap.height, 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  return canvas;
+}
+
+async function canvasToPngBase64(canvas) {
+  const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!pngBlob) throw new Error("Could not prepare the image for AI.");
+  return bytesToBase64(new Uint8Array(await pngBlob.arrayBuffer()));
 }
 
 function detectBankColorHint(canvas) {

@@ -16,7 +16,7 @@ import {
   TEMPLATE_MONTHS,
 } from "./data.js";
 import { downloadSharePointFile, ensureSharePointFolderPath, listSharePointFileNames, listSharePointFolders, uploadSharePointFile } from "./graph.js";
-import { emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
+import { assertValidPdfBytes, emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
 import {
   $,
   clearFlash,
@@ -537,28 +537,36 @@ async function autoFillFromQueuedFiles() {
   try {
     const folderRoot = currentStampFolderRoot();
     const documents = [];
+    const skippedFiles = [];
     let remainingAnalysisImages = MAX_AUTOFILL_ANALYSIS_IMAGES;
     for (let index = 0; index < queuedFiles.length; index += 1) {
       if (remainingAnalysisImages <= 0) break;
       const item = queuedFiles[index];
       const file = item.file;
       showFlash(`Preparing AI ${index + 1} of ${queuedFiles.length}: ${file.name}`, "info");
-      const payload = await fileToAnalysisPayload(file, {
-        ...emailProcessingOptions(item),
-        maxImages: remainingAnalysisImages,
-      });
-      if (payload.images.length) {
-        documents.push(payload);
-        remainingAnalysisImages -= payload.images.length;
+      try {
+        const payload = await fileToAnalysisPayload(file, {
+          ...emailProcessingOptions(item),
+          maxImages: remainingAnalysisImages,
+        });
+        if (payload.images.length) {
+          documents.push(payload);
+          remainingAnalysisImages -= payload.images.length;
+        }
+      } catch (error) {
+        skippedFiles.push(`${file.name}: ${error.message || error}`);
       }
     }
 
     if (!documents.length) {
-      throw new Error("No supported PDFs or images were found for analysis.");
+      const skippedSummary = skippedFiles.length ? ` Skipped: ${skippedFiles.slice(0, 3).join(" | ")}` : "";
+      throw new Error(`No supported PDFs or images were found for analysis.${skippedSummary}`);
     }
 
     if (remainingAnalysisImages <= 0) {
       showFlash(`Auto-fill is reading the first ${MAX_AUTOFILL_ANALYSIS_IMAGES} pages/images to avoid timeouts.`, "info");
+    } else if (skippedFiles.length) {
+      showFlash(`Auto-fill skipped ${skippedFiles.length} file${skippedFiles.length === 1 ? "" : "s"} it could not read.`, "warning");
     }
 
     showFlash("Reading documents with Vision and GPT...", "info");
@@ -875,6 +883,7 @@ async function processAndUploadInvoice() {
       title: isDocuments ? suggestedTitle : "",
       description: isDocuments ? description : "",
     });
+    await assertValidPdfBytes(stampedBytes, "Generated stamped PDF");
 
     const initialFileName = isDocuments
       ? buildDocumentsFileName({ suggestedTitle })
@@ -921,7 +930,10 @@ async function processAndUploadInvoice() {
 
     showFlash("Uploading combined PDF to SharePoint...", "info");
     for (const targetPath of targetPaths.targetPaths) {
-      await uploadSharePointFile(targetPath, stampedBytes, "application/pdf");
+      const uploadedItem = await uploadSharePointFile(targetPath, stampedBytes, "application/pdf");
+      assertUploadedPdfSize(uploadedItem, stampedBytes, targetPath);
+      const savedBytes = await downloadSharePointFile(targetPath);
+      await assertValidPdfBytes(savedBytes, `Saved PDF ${targetPath}`);
     }
 
     if (state.stampedBlobUrl) URL.revokeObjectURL(state.stampedBlobUrl);
@@ -937,6 +949,20 @@ async function processAndUploadInvoice() {
   } finally {
     elements.processBtn.disabled = false;
     elements.processBtn.querySelector("span").textContent = "Process";
+  }
+}
+
+function assertUploadedPdfSize(uploadedItem, expectedBytes, targetPath) {
+  const expectedSize = expectedBytes?.byteLength || expectedBytes?.length || 0;
+  const uploadedSize = Number(uploadedItem?.size) || 0;
+  if (expectedSize < 100) {
+    throw new Error(`Generated PDF is too small before upload: ${expectedSize} bytes.`);
+  }
+  if (uploadedSize && uploadedSize < 100) {
+    throw new Error(`Uploaded PDF is too small at ${targetPath}: ${uploadedSize} bytes.`);
+  }
+  if (uploadedSize && Math.abs(uploadedSize - expectedSize) > 0) {
+    throw new Error(`Uploaded PDF size mismatch at ${targetPath}. Expected ${expectedSize} bytes, SharePoint saved ${uploadedSize} bytes.`);
   }
 }
 

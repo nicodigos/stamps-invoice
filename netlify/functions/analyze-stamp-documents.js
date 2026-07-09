@@ -1,7 +1,7 @@
 const { webcrypto } = require("node:crypto");
 
 const MAX_VISION_PAGES = 12;
-const VISION_CONCURRENCY = 4;
+const VISION_CONCURRENCY = 2;
 
 exports.handler = async function handler(event) {
   if (event.httpMethod !== "POST") {
