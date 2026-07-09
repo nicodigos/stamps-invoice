@@ -115,6 +115,7 @@ let queuedFiles = [];
 let currentFileTreeResult = null;
 let currentEmailPreviews = [];
 let emailPreviewRenderId = 0;
+let excludedEmailAttachmentKeysByFileId = new Map();
 let currentFolderTemplateText = "";
 let templateBankAccounts = [];
 let folderConfirmResolver = null;
@@ -127,6 +128,18 @@ const NOT_IDENTIFIED_FOLDER = "Not Identified";
 const NEW_STRUCTURE_MIN_UPLOAD_DATE = new Date("2026-07-01T00:00:00");
 const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
 const TEMPLATE_ACCOUNT_TYPES = ["debit", "credit"];
+const EXPENSE_FILENAME_BANK_CODES = {
+  "scotia bank": "SB",
+  scotiabank: "SB",
+  "national bank": "NB",
+  national: "NB",
+  desjardins: "DJ",
+  desjardin: "DJ",
+};
+const EXPENSE_FILENAME_PAYMENT_TYPE_CODES = {
+  credit: "C",
+  debit: "D",
+};
 
 async function boot() {
   wireTabs();
@@ -257,10 +270,18 @@ function wireButtons() {
   elements.uploadList.addEventListener("click", (event) => {
     const button = event.target.closest(".upload-remove");
     if (!button) return;
+    excludedEmailAttachmentKeysByFileId.delete(button.dataset.fileId);
     queuedFiles = queuedFiles.filter((item) => item.id !== button.dataset.fileId);
     renderUploadQueue();
   });
   elements.emailPreviewList.addEventListener("click", (event) => {
+    const removeButton = event.target.closest(".email-attachment-remove");
+    if (removeButton) {
+      event.preventDefault();
+      removeEmailAttachment(removeButton.dataset.emailIndex, removeButton.dataset.attachmentKey);
+      return;
+    }
+
     const button = event.target.closest(".email-attachment-download");
     if (!button) return;
     event.preventDefault();
@@ -379,12 +400,11 @@ function renderUploadQueue() {
 
 async function renderEmailPreviews() {
   const renderId = ++emailPreviewRenderId;
-  const emailFiles = queuedFiles
-    .map((item) => item.file)
-    .filter((file) => /\.(eml|msg)$/i.test(file.name || ""));
+  const emailItems = queuedFiles
+    .filter((item) => /\.(eml|msg)$/i.test(item.file.name || ""));
 
   currentEmailPreviews = [];
-  if (!emailFiles.length) {
+  if (!emailItems.length) {
     elements.emailPreviewPanel.hidden = true;
     elements.emailPreviewCount.textContent = "";
     elements.emailPreviewList.innerHTML = "";
@@ -395,12 +415,16 @@ async function renderEmailPreviews() {
   elements.emailPreviewCount.textContent = "Reading...";
   elements.emailPreviewList.innerHTML = "";
 
-  const previews = await Promise.all(emailFiles.map(async (file) => {
+  const previews = await Promise.all(emailItems.map(async (item) => {
     try {
-      return await emailFileToPreview(file);
+      return {
+        ...await emailFileToPreview(item.file),
+        fileId: item.id,
+      };
     } catch (error) {
       return {
-        sourceName: file.name,
+        fileId: item.id,
+        sourceName: item.file.name,
         error: error.message || String(error),
         email: { subject: "", from: "", date: "", text: "" },
         attachments: [],
@@ -417,7 +441,9 @@ async function renderEmailPreviews() {
 
 function renderEmailPreview(preview, emailIndex) {
   const email = preview.email || {};
-  const attachments = Array.isArray(preview.attachments) ? preview.attachments : [];
+  const excludedKeys = excludedEmailAttachmentKeysByFileId.get(preview.fileId) || new Set();
+  const attachments = (Array.isArray(preview.attachments) ? preview.attachments : [])
+    .filter((attachment) => !excludedKeys.has(emailAttachmentKey(attachment)));
   const attachmentHtml = attachments.length
     ? attachments.map((attachment, attachmentIndex) => `
       <li>
@@ -426,9 +452,14 @@ function renderEmailPreview(preview, emailIndex) {
           <strong title="${escapeHtml(attachment.name)}">${escapeHtml(attachment.name)}</strong>
           <small>${escapeHtml(attachment.mimeType || "Attachment")} &middot; ${formatFileSize(attachment.size)}</small>
         </span>
-        <button class="email-attachment-download" type="button" data-email-index="${emailIndex}" data-attachment-index="${attachmentIndex}" title="Download attachment" aria-label="Download ${escapeHtml(attachment.name)}">
-          <i data-lucide="download"></i>
-        </button>
+        <span class="email-attachment-actions">
+          <button class="email-attachment-download" type="button" data-email-index="${emailIndex}" data-attachment-index="${attachmentIndex}" title="Download attachment" aria-label="Download ${escapeHtml(attachment.name)}">
+            <i data-lucide="download"></i>
+          </button>
+          <button class="email-attachment-remove" type="button" data-email-index="${emailIndex}" data-attachment-key="${escapeHtml(emailAttachmentKey(attachment))}" title="Remove from upload" aria-label="Remove ${escapeHtml(attachment.name)} from upload">
+            <i data-lucide="x"></i>
+          </button>
+        </span>
       </li>
     `).join("")
     : "<li><span><strong>No attachments found</strong></span></li>";
@@ -470,10 +501,30 @@ function renderAttachmentThumbnail(attachment) {
 
 function downloadEmailAttachment(emailIndex, attachmentIndex) {
   const preview = currentEmailPreviews[Number(emailIndex)];
-  const attachment = preview?.attachments?.[Number(attachmentIndex)];
+  const excludedKeys = excludedEmailAttachmentKeysByFileId.get(preview?.fileId) || new Set();
+  const attachments = (preview?.attachments || []).filter((attachment) => !excludedKeys.has(emailAttachmentKey(attachment)));
+  const attachment = attachments[Number(attachmentIndex)];
   if (!attachment) throw new Error("Attachment not found.");
   const blob = new Blob([attachment.bytes], { type: attachment.mimeType || "application/octet-stream" });
   triggerBrowserDownload(blob, attachment.name || "attachment");
+}
+
+function removeEmailAttachment(emailIndex, attachmentKey) {
+  const preview = currentEmailPreviews[Number(emailIndex)];
+  if (!preview?.fileId || !attachmentKey) return;
+  const excludedKeys = excludedEmailAttachmentKeysByFileId.get(preview.fileId) || new Set();
+  excludedKeys.add(attachmentKey);
+  excludedEmailAttachmentKeysByFileId.set(preview.fileId, excludedKeys);
+  elements.emailPreviewList.innerHTML = currentEmailPreviews.map(renderEmailPreview).join("");
+  window.lucide?.createIcons();
+}
+
+function emailAttachmentKey(attachment) {
+  return [
+    String(attachment.name || "").trim().toLowerCase(),
+    String(attachment.mimeType || "").trim().toLowerCase(),
+    String(attachment.size || attachment.bytes?.byteLength || 0),
+  ].join("|");
 }
 
 async function autoFillFromQueuedFiles() {
@@ -486,9 +537,10 @@ async function autoFillFromQueuedFiles() {
     const folderRoot = currentStampFolderRoot();
     const documents = [];
     for (let index = 0; index < queuedFiles.length; index += 1) {
-      const file = queuedFiles[index].file;
+      const item = queuedFiles[index];
+      const file = item.file;
       showFlash(`Preparing AI ${index + 1} of ${queuedFiles.length}: ${file.name}`, "info");
-      const payload = await fileToAnalysisPayload(file);
+      const payload = await fileToAnalysisPayload(file, emailProcessingOptions(item));
       if (payload.images.length) {
         documents.push(payload);
       }
@@ -599,6 +651,8 @@ function applyExpenseFinancialFields(result) {
   if (confidence.account_type >= 0.65) {
     setSelectValue(elements.accountTypeInput, result.account_type);
   }
+
+  setInputValue(elements.accountNumberInput, lastFourDigits(result.account_last_four));
 }
 
 function setInputValue(input, value) {
@@ -680,6 +734,10 @@ function hideAccountNumberOptions() {
 
 function lastFourDigits(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 4);
+}
+
+function normalizeIdentifier(value) {
+  return String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 
 function closeAccountNumberOptionsOnOutsidePointer(event) {
@@ -790,9 +848,10 @@ async function processAndUploadInvoice() {
     const filesToProcess = [...queuedFiles];
     const sourcePdfs = [];
     for (let index = 0; index < filesToProcess.length; index += 1) {
-      const file = filesToProcess[index].file;
+      const item = filesToProcess[index];
+      const file = item.file;
       showFlash(`Preparing file ${index + 1} of ${filesToProcess.length}: ${file.name}`, "info");
-      sourcePdfs.push(await uploadedFileToPdfBytes(file));
+      sourcePdfs.push(await uploadedFileToPdfBytes(file, emailProcessingOptions(item)));
     }
 
     showFlash("Combining files into one PDF...", "info");
@@ -811,7 +870,14 @@ async function processAndUploadInvoice() {
       : isStatements
         ? buildDocumentsFileName({ suggestedTitle })
         : isExpenses
-          ? buildStampedFileName({ paymentCode, clientInvoice, date })
+          ? buildStampedFileName({
+              paymentCode,
+              clientInvoice,
+              date,
+              bank: currentStampBankValue(),
+              accountType: elements.accountTypeInput.value,
+              accountNumber: elements.accountNumberInput.value,
+            })
           : buildGeneralStampedFileName({ category, date });
     const useNewFolderStructure = stampUsesNewFolderStructure();
     if (!useNewFolderStructure) {
@@ -854,6 +920,7 @@ async function processAndUploadInvoice() {
     renderStampResultPaths(targetPaths);
     elements.stampResult.hidden = false;
     queuedFiles = [];
+    excludedEmailAttachmentKeysByFileId = new Map();
     renderUploadQueue();
     showFlash(`${filesToProcess.length} file${filesToProcess.length === 1 ? "" : "s"} combined into one PDF and uploaded successfully.`, "success");
   } finally {
@@ -862,15 +929,29 @@ async function processAndUploadInvoice() {
   }
 }
 
+function emailProcessingOptions(item) {
+  return {
+    excludedAttachmentKeys: excludedEmailAttachmentKeysByFileId.get(item.id) || new Set(),
+  };
+}
+
 function assertAllowedUploadDate(date) {
   if (date < NEW_STRUCTURE_MIN_UPLOAD_DATE) {
     throw new Error("Uploads are blocked for dates before July 1, 2026.");
   }
 }
 
-function buildStampedFileName({ paymentCode, clientInvoice, date }) {
-  const baseName = `P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
+function buildStampedFileName({ paymentCode, clientInvoice, date, bank, accountType, accountNumber }) {
+  const baseName = `${expenseFileNamePrefix({ bank, accountType, accountNumber })}_P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
   return `${baseName}.pdf`;
+}
+
+function expenseFileNamePrefix({ bank, accountType, accountNumber }) {
+  const bankCode = EXPENSE_FILENAME_BANK_CODES[normalizeIdentifier(bank)];
+  const paymentTypeCode = EXPENSE_FILENAME_PAYMENT_TYPE_CODES[normalizeIdentifier(accountType)];
+  if (!bankCode) throw new Error("Select a valid bank for the expense file name prefix.");
+  if (!paymentTypeCode) throw new Error("Select Credit or debit as the payment type for the expense file name prefix.");
+  return `${bankCode}${paymentTypeCode}${lastFourDigits(accountNumber) || "0000"}`;
 }
 
 function buildDocumentsFileName({ suggestedTitle }) {
@@ -1231,6 +1312,10 @@ function buildNewStructureTargetPaths({ bank, accountType, accountNumber, income
     return singleNewStructureTarget(categoryFolderPath, fileName);
   }
 
+  if (newStructureRootForCategory(category) === "Expenses") {
+    return singleNewStructureTarget(categoryFolderPath, fileName);
+  }
+
   return singleNewStructureTarget(buildAccountScopedFolderPath({
     basePath: categoryFolderPath,
     bank,
@@ -1441,10 +1526,6 @@ function buildDocumentsTemplate() {
     name: "Documents",
     children: [
       {
-        name: "Reimbursements",
-        children: ["OP", "Reimbursements"],
-      },
-      {
         name: "Tax Remittances",
         children: ["GST HST", "Payroll Remittances", "QST"],
       },
@@ -1464,10 +1545,16 @@ function buildDocumentsTemplate() {
 function buildExpensesTemplate(accounts) {
   return {
     name: "Expenses",
-    children: EXPENSE_CATEGORIES.map((category) => ({
-      name: category,
-      children: accountTree(accounts),
-    })),
+    children: [
+      ...EXPENSE_CATEGORIES.map((category) => ({
+        name: category,
+        children: accountTree(accounts),
+      })),
+      {
+        name: "Reimbursements",
+        children: ["OP", "Reimbursements"],
+      },
+    ],
   };
 }
 

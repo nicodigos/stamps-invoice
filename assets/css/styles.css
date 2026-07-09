@@ -1596,7 +1596,7 @@ pre {
 
 .email-attachment-list li {
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr) 34px;
+  grid-template-columns: 86px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 76px;
@@ -1643,7 +1643,14 @@ pre {
   white-space: nowrap;
 }
 
-.email-attachment-download {
+.email-attachment-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.email-attachment-download,
+.email-attachment-remove {
   display: inline-grid;
   place-items: center;
   width: 32px;
@@ -1658,6 +1665,15 @@ pre {
 .email-attachment-download:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.email-attachment-remove {
+  color: var(--danger);
+}
+
+.email-attachment-remove:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .flash {
@@ -2014,7 +2030,7 @@ dd {
   }
 
   .email-attachment-list li {
-    grid-template-columns: 72px minmax(0, 1fr) 34px;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
   }
 
   .email-attachment-thumb {

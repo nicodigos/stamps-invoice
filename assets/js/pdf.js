@@ -10,12 +10,12 @@ const POSTAL_MIME_URL = "https://esm.sh/postal-mime@2.4.3";
 const MSG_READER_URL = "https://esm.sh/@kenjiuno/msgreader@1.28.0";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
 
-export async function uploadedFileToPdfBytes(file) {
-  const pdfs = await uploadedFileToPdfByteList(file);
+export async function uploadedFileToPdfBytes(file, options = {}) {
+  const pdfs = await uploadedFileToPdfByteList(file, options);
   return mergePdfBytes(pdfs);
 }
 
-export async function uploadedFileToPdfByteList(file) {
+export async function uploadedFileToPdfByteList(file, options = {}) {
   const ext = extensionOf(file.name);
   if (PDF_EXTS.has(ext)) {
     return [new Uint8Array(await file.arrayBuffer())];
@@ -27,16 +27,16 @@ export async function uploadedFileToPdfByteList(file) {
     return [await imageToPdfBytes(await file.arrayBuffer(), ext)];
   }
   if (MESSAGE_EXTS.has(ext)) {
-    const parsed = await parseMessageFile(file);
+    const parsed = await parseMessageFile(file, options);
     return Promise.all(parsed.attachments.map((attachment) => fileContentToPdfBytes(attachment.bytes, attachment.name)));
   }
   throw new Error(`Unsupported file type: ${ext || file.type || "no extension"}.`);
 }
 
-export async function fileToAnalysisPayload(file) {
+export async function fileToAnalysisPayload(file, options = {}) {
   const ext = extensionOf(file.name);
   if (MESSAGE_EXTS.has(ext)) {
-    const parsed = await parseMessageFile(file);
+    const parsed = await parseMessageFile(file, options);
     const images = [];
     for (const attachment of parsed.attachments) {
       images.push(...await contentToAnalysisImages(attachment.bytes, attachment.name, attachment.name));
@@ -66,6 +66,7 @@ export async function emailFileToPreview(file) {
       name: attachment.name,
       mimeType: attachment.mimeType,
       size: attachment.bytes.byteLength,
+      key: attachmentKey(attachment),
       thumbnailDataUrl: await attachmentToThumbnailDataUrl(attachment.bytes, attachment.name),
       bytes: attachment.bytes,
     }))),
@@ -75,7 +76,7 @@ export async function emailFileToPreview(file) {
 export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoice, stampType = "paid", title = "", description = "" }) {
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
   const doc = await PDFDocument.load(inputBytes);
-  const font = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
   const color = rgb(0.75, 0, 0);
   const formattedDate = formatStampDate(date);
 
@@ -83,15 +84,15 @@ export async function stampPdfBytes(inputBytes, { date, paymentCode, clientInvoi
   if (description) doc.setSubject(description);
 
   for (const page of doc.getPages()) {
-    const label = stampType === "paid" ? "PAID" : "PROCESSED";
-    drawCornerStamp(page, `${label} ${formattedDate}`, { font, color });
+    const stampText = stampType === "paid" ? `PAID ${formattedDate} Paola Pongo` : `PROCESSED ${formattedDate}`;
+    drawCornerStamp(page, stampText, { font, color });
   }
 
   return doc.save();
 }
 
 function drawCornerStamp(page, text, { font, color }) {
-  const size = 6;
+  const size = 20;
   const margin = 5;
   const { width, height } = page.getSize();
   const stampText = String(text || "").trim();
@@ -99,7 +100,7 @@ function drawCornerStamp(page, text, { font, color }) {
   const textWidth = font.widthOfTextAtSize(stampText, size);
   const x = Math.max(margin, width - margin - textWidth);
   const y = height - margin - size;
-  drawBoldText(page, stampText, x, y, { size, font, color });
+  page.drawText(stampText, { x, y, size, font, color });
 }
 
 function formatStampDate(value) {
@@ -190,6 +191,7 @@ async function parseEmlFile(file, options = {}) {
   if (!options.includeAllAttachments) {
     attachments = attachments.filter((attachment) => isProcessableAttachment(attachment));
   }
+  attachments = filterExcludedAttachments(attachments, options);
 
   if (!attachments.length && !options.includeAllAttachments) {
     throw new Error(`The email "${file.name}" does not have supported PDF or image attachments.`);
@@ -228,6 +230,7 @@ async function parseMsgFile(file, options = {}) {
   if (!options.includeAllAttachments) {
     attachments = attachments.filter((attachment) => isProcessableAttachment(attachment));
   }
+  attachments = filterExcludedAttachments(attachments, options);
 
   if (!attachments.length && !options.includeAllAttachments) {
     throw new Error(`The Outlook message "${file.name}" does not have supported PDF or image attachments.`);
@@ -251,6 +254,20 @@ function isRealAttachment(attachment) {
 function isProcessableAttachment(attachment) {
   const ext = extensionOf(attachment.name);
   return isRealAttachment(attachment) && (PDF_EXTS.has(ext) || IMAGE_EXTS.has(ext));
+}
+
+function filterExcludedAttachments(attachments, options) {
+  const excluded = options?.excludedAttachmentKeys;
+  if (!excluded?.size) return attachments;
+  return attachments.filter((attachment) => !excluded.has(attachmentKey(attachment)));
+}
+
+function attachmentKey(attachment) {
+  return [
+    String(attachment.name || "").trim().toLowerCase(),
+    String(attachment.mimeType || "").trim().toLowerCase(),
+    String(attachment.bytes?.byteLength || 0),
+  ].join("|");
 }
 
 async function fileContentToPdfBytes(bytes, name) {
@@ -538,11 +555,6 @@ async function webpToPngBytes(bytes) {
   const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!pngBlob) throw new Error("Could not convert the WebP image.");
   return new Uint8Array(await pngBlob.arrayBuffer());
-}
-
-function drawBoldText(page, text, x, y, options) {
-  page.drawText(text, { ...options, x, y });
-  page.drawText(text, { ...options, x: x + 0.4, y });
 }
 
 function extensionOf(name) {
