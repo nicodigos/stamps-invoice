@@ -1095,9 +1095,9 @@ function currentStampCategories() {
 }
 
 function restoreStampFolderStructurePreference() {
-  const stored = localStorage.getItem("stampFolderStructure");
-  elements.folderStructureInput.checked = stored !== "legacy";
-  elements.folderStructureLegacyInput.checked = stored === "legacy";
+  elements.folderStructureInput.checked = true;
+  elements.folderStructureLegacyInput.checked = false;
+  localStorage.setItem("stampFolderStructure", "new");
 }
 
 function syncStampCategoryOptions() {
