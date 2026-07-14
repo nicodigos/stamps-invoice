@@ -9,6 +9,7 @@ import {
   COMPANIES,
   COMPANY_SHAREPOINT_DIRS,
   EXPENSE_CATEGORIES,
+  NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES,
   NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH,
   NEW_STRUCTURE_FOLDER_ROOTS,
   NEW_STRUCTURE_STAMP_CATEGORIES,
@@ -125,6 +126,8 @@ let accountNumberFolderOptions = [];
 let autoFillInProgress = false;
 const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
 const NOT_IDENTIFIED_FOLDER = "Not Identified";
+const LEGACY_MIN_UPLOAD_DATE = new Date("2026-01-01T00:00:00");
+const LEGACY_MAX_UPLOAD_DATE = new Date("2026-06-30T00:00:00");
 const NEW_STRUCTURE_MIN_UPLOAD_DATE = new Date("2026-07-01T00:00:00");
 const MAX_AUTOFILL_ANALYSIS_IMAGES = 12;
 const TEMPLATE_BANKS = ["Desjardin", "National", "Scotiabank"];
@@ -177,7 +180,7 @@ function wireTabs() {
       scrollHeaderNavButtonIntoView(button);
       syncInvoiceReaderAuth();
       if (button.dataset.tabTarget === "folder-template-tab") {
-        runGuarded(loadFolderTemplateCsv);
+        runGuarded(renderFolderTemplate);
       }
     });
   });
@@ -838,7 +841,8 @@ async function processAndUploadInvoice() {
     if (!queuedFiles.length) throw new Error("Select or drop at least one invoice first.");
 
     const date = parseIsoDate(elements.dateInput.value);
-    assertAllowedUploadDate(date);
+    const useNewFolderStructure = stampUsesNewFolderStructure();
+    assertAllowedUploadDate(date, { useNewFolderStructure });
     const category = currentStampEffectiveCategory();
     if (!category) throw new Error("Select a folder and category first.");
     const isDocuments = currentStampRootIsDocuments();
@@ -890,19 +894,17 @@ async function processAndUploadInvoice() {
       : isStatements
         ? buildDocumentsFileName({ suggestedTitle })
         : isExpenses
-          ? buildStampedFileName({
-              paymentCode,
-              clientInvoice,
-              date,
-              bank: currentStampBankValue(),
-              accountType: elements.accountTypeInput.value,
-              accountNumber: elements.accountNumberInput.value,
-            })
+          ? useNewFolderStructure
+            ? buildStampedFileName({
+                paymentCode,
+                clientInvoice,
+                date,
+                bank: currentStampBankValue(),
+                accountType: elements.accountTypeInput.value,
+                accountNumber: elements.accountNumberInput.value,
+              })
+            : buildLegacyStampedFileName({ paymentCode, clientInvoice, date })
           : buildGeneralStampedFileName({ category, date });
-    const useNewFolderStructure = stampUsesNewFolderStructure();
-    if (!useNewFolderStructure) {
-      throw new Error("Uploads must use the new folder structure.");
-    }
     const targetPaths = buildTargetPaths({
       company: elements.companyInput.value,
       bank: currentStampBankValue(),
@@ -972,14 +974,25 @@ function emailProcessingOptions(item) {
   };
 }
 
-function assertAllowedUploadDate(date) {
-  if (date < NEW_STRUCTURE_MIN_UPLOAD_DATE) {
+function assertAllowedUploadDate(date, { useNewFolderStructure }) {
+  if (useNewFolderStructure && date < NEW_STRUCTURE_MIN_UPLOAD_DATE) {
     throw new Error("Uploads are blocked for dates before July 1, 2026.");
+  }
+  if (!useNewFolderStructure && date < LEGACY_MIN_UPLOAD_DATE) {
+    throw new Error("Legacy uploads are blocked for dates before January 1, 2026.");
+  }
+  if (!useNewFolderStructure && date > LEGACY_MAX_UPLOAD_DATE) {
+    throw new Error("Legacy uploads are blocked for dates after June 30, 2026. Use the new stamp structure for July 1, 2026 onward.");
   }
 }
 
 function buildStampedFileName({ paymentCode, clientInvoice, date, bank, accountType, accountNumber }) {
   const baseName = `${expenseFileNamePrefix({ bank, accountType, accountNumber })}_P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
+  return `${baseName}.pdf`;
+}
+
+function buildLegacyStampedFileName({ paymentCode, clientInvoice, date }) {
+  const baseName = `P_${sanitizeFilename(paymentCode)}_I_${sanitizeFilename(clientInvoice)}_${yyyymmdd(date)}`;
   return `${baseName}.pdf`;
 }
 
@@ -1438,23 +1451,11 @@ function renderFolderTemplate() {
   if (!companyRoot) throw new Error(`Company has no mapping: ${company}`);
 
   const month = elements.templateMonthInput.value;
-  if (!templateBankAccounts.length) {
-    currentFolderTemplateText = "";
-    elements.templateSourceOutput.textContent = "Load the bank accounts workbook before generating a folder template.";
-    elements.templateCountOutput.textContent = "0 folders";
-    elements.templatePathOutput.textContent = joinSharePointPath(companyRoot, String(year), month);
-    elements.folderTemplateTree.innerHTML = "";
-    return;
-  }
-
-  const accounts = bankAccountsForCompany(company);
-  const tree = buildFolderTemplateTree({ companyRoot, year, month, accounts });
+  const tree = buildFolderTemplateTree({ companyRoot, year, month });
   const folderCount = countFolderNodes(tree);
   currentFolderTemplateText = treeToText(tree);
 
-  elements.templateSourceOutput.textContent = accounts.length
-    ? `Bank accounts loaded: ${accounts.length} for this company.`
-    : "Workbook loaded. No bank accounts found for this company; generating folders without bank subfolders.";
+  elements.templateSourceOutput.textContent = "Naming-convention template; bank account folders are not required.";
   elements.templateCountOutput.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
   elements.templatePathOutput.textContent = joinSharePointPath(companyRoot, String(year), month);
   elements.folderTemplateTree.innerHTML = renderTemplateNode(tree, true);
@@ -1466,7 +1467,7 @@ async function generateFolderTemplate() {
   elements.generateFolderTemplateBtn.querySelector("span").textContent = "Downloading";
   try {
     if (!window.JSZip) throw new Error("JSZip is not loaded.");
-    await loadFolderTemplateCsv();
+    renderFolderTemplate();
     const fileName = buildFolderTemplateFileName();
     const blob = await folderTemplateToZip(buildCurrentMonthFolderTemplateTree());
     triggerBrowserDownload(blob, fileName);
@@ -1475,15 +1476,6 @@ async function generateFolderTemplate() {
     elements.generateFolderTemplateBtn.disabled = false;
     elements.generateFolderTemplateBtn.querySelector("span").textContent = "Download";
   }
-}
-
-async function loadFolderTemplateCsv() {
-  elements.templateSourceOutput.textContent = "Loading bank accounts workbook...";
-  elements.templateCountOutput.textContent = "0 folders";
-  elements.folderTemplateTree.innerHTML = "";
-  currentFolderTemplateText = "";
-  await loadCloudTemplateBankWorkbook();
-  renderFolderTemplate();
 }
 
 function buildFolderTemplateFileName() {
@@ -1502,20 +1494,17 @@ function buildCurrentFolderTemplateTree() {
     companyRoot,
     year,
     month: elements.templateMonthInput.value,
-    accounts: bankAccountsForCompany(company),
   });
 }
 
 function buildCurrentMonthFolderTemplateTree() {
-  const company = elements.templateCompanyInput.value;
   const month = elements.templateMonthInput.value;
-  const accounts = bankAccountsForCompany(company);
   return {
     name: month,
     children: [
-      buildExpensesTemplate(accounts),
-      buildIncomeTemplate(accounts),
-      buildStatementsTemplate(accounts),
+      buildExpensesTemplate(),
+      buildIncomeTemplate(),
+      buildStatementsTemplate(),
       buildDocumentsTemplate(),
     ],
   };
@@ -1543,15 +1532,15 @@ function sanitizeZipPathPart(value) {
     .trim() || "folder";
 }
 
-function buildFolderTemplateTree({ companyRoot, year, month, accounts }) {
+function buildFolderTemplateTree({ companyRoot, year, month }) {
   return {
     name: joinSharePointPath(companyRoot, String(year)),
     children: [{
       name: month,
       children: [
-        buildExpensesTemplate(accounts),
-        buildIncomeTemplate(accounts),
-        buildStatementsTemplate(accounts),
+        buildExpensesTemplate(),
+        buildIncomeTemplate(),
+        buildStatementsTemplate(),
         buildDocumentsTemplate(),
       ],
     }],
@@ -1579,14 +1568,12 @@ function buildDocumentsTemplate() {
   };
 }
 
-function buildExpensesTemplate(accounts) {
+function buildExpensesTemplate() {
   return {
     name: "Expenses",
     children: [
-      ...EXPENSE_CATEGORIES.map((category) => ({
-        name: category,
-        children: accountTree(accounts),
-      })),
+      ...EXPENSE_CATEGORIES,
+      ...NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES,
       {
         name: "Reimbursements",
         children: ["OP", "Reimbursements"],
@@ -1595,7 +1582,7 @@ function buildExpensesTemplate(accounts) {
   };
 }
 
-function buildIncomeTemplate(accounts) {
+function buildIncomeTemplate() {
   return {
     name: "Income",
     children: [
@@ -1608,33 +1595,11 @@ function buildIncomeTemplate(accounts) {
   };
 }
 
-function buildStatementsTemplate(accounts) {
+function buildStatementsTemplate() {
   return {
     name: "Statements",
-    children: accountTree(accounts),
+    children: [],
   };
-}
-
-function accountTree(accounts) {
-  const grouped = new Map();
-  for (const account of accounts) {
-    if (!grouped.has(account.bank)) grouped.set(account.bank, new Map());
-    const typeMap = grouped.get(account.bank);
-    if (!typeMap.has(account.type)) typeMap.set(account.type, []);
-    typeMap.get(account.type).push(account.last4);
-  }
-
-  return Array.from(grouped.entries())
-    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-    .map(([bank, typeMap]) => ({
-      name: bank,
-      children: Array.from(typeMap.entries())
-        .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-        .map(([type, last4List]) => ({
-          name: type,
-          children: Array.from(new Set(last4List.filter(Boolean))).sort().map((last4) => ({ name: last4, children: [] })),
-        })),
-    }));
 }
 
 function renderTemplateNode(node, isRoot = false) {
@@ -1772,7 +1737,7 @@ function normalizeCsvHeader(value) {
 async function copyFolderTemplate() {
   if (!currentFolderTemplateText) renderFolderTemplate();
   if (!currentFolderTemplateText) {
-    throw new Error("Load the bank accounts workbook before copying a folder template.");
+    throw new Error("Choose a valid company before copying a folder template.");
   }
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(currentFolderTemplateText);

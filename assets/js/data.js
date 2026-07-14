@@ -126,11 +126,14 @@ export const EXPENSE_CATEGORIES = [
   "QST Suspense",
 ];
 
+export const NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES = ["Card Purchases", "Tax Payments"];
+
 export const NEW_STRUCTURE_STAMP_CATEGORIES = [
   "Income - Invoices",
   "Income - Transactions",
   "Statements",
   ...EXPENSE_CATEGORIES,
+  ...NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES,
   "Expenses - Reimbursements - OP",
   "Expenses - Reimbursements - Reimbursements",
   "Documents - Tax Remittances - GST HST",
@@ -153,6 +156,7 @@ export const NEW_STRUCTURE_CATEGORY_TO_MONTH_REL_PATH = Object.fromEntries([
   ["Income - Transactions", ["Income", "Transactions"]],
   ["Statements", ["Statements"]],
   ...EXPENSE_CATEGORIES.map((category) => [category, ["Expenses", category]]),
+  ...NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES.map((category) => [category, ["Expenses", category]]),
   ["Expenses - Reimbursements - OP", ["Expenses", "Reimbursements", "OP"]],
   ["Expenses - Reimbursements - Reimbursements", ["Expenses", "Reimbursements", "Reimbursements"]],
   ["Documents - Tax Remittances - GST HST", ["Documents", "Tax Remittances", "GST HST"]],
