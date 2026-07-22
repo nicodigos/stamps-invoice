@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node dev-server.js",
     "dev:netlify": "netlify dev",
-    "build": "echo \"No build step required\""
+    "build": "echo \"No build step required\"",
+    "test": "node --test"
   },
   "dependencies": {
     "mysql2": "^3.11.5",

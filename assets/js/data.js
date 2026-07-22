@@ -124,6 +124,7 @@ export const EXPENSE_CATEGORIES = [
   "6890 Parking Expense",
   "QST Payable",
   "QST Suspense",
+  "Supply Purchases",
 ];
 
 export const NEW_STRUCTURE_EXPENSE_SPECIAL_CATEGORIES = ["Card Purchases", "Tax Payments"];

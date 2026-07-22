@@ -1,10 +1,12 @@
+import { describeError } from "./error-utils.mjs";
+
 export const $ = (selector) => document.querySelector(selector);
 
 export function showFlash(message, type = "info") {
   const flash = $("#flash");
   window.clearTimeout(window.__flashTimer);
   window.clearTimeout(window.__flashHideTimer);
-  flash.textContent = message;
+  flash.textContent = type === "error" ? describeError(message) : message;
   flash.className = `flash ${type}`;
   flash.hidden = false;
   const timeout = type === "error" ? 7000 : type === "warning" ? 6000 : 4200;

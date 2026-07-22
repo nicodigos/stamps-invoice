@@ -1,4 +1,5 @@
 import { state } from "./state.js";
+import { describeHttpError } from "./error-utils.mjs";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
@@ -26,7 +27,14 @@ async function graphJson(url, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new GraphRequestError(await response.text(), response.status);
+    const operation = options.method === "DELETE"
+      ? "SharePoint deletion"
+      : options.method === "PUT"
+        ? "SharePoint upload"
+        : options.method === "POST"
+          ? "SharePoint folder creation"
+          : "SharePoint lookup";
+    throw new GraphRequestError(describeHttpError(operation, response.status, await response.text()), response.status);
   }
   return response.status === 204 ? {} : response.json();
 }
@@ -36,7 +44,7 @@ async function graphText(url) {
     headers: authHeaders(),
   });
   if (!response.ok) {
-    throw new GraphRequestError(await response.text(), response.status);
+    throw new GraphRequestError(describeHttpError("SharePoint text download", response.status, await response.text()), response.status);
   }
   return response.text();
 }
@@ -46,7 +54,7 @@ async function graphArrayBuffer(url) {
     headers: authHeaders(),
   });
   if (!response.ok) {
-    throw new GraphRequestError(await response.text(), response.status);
+    throw new GraphRequestError(describeHttpError("SharePoint file download", response.status, await response.text()), response.status);
   }
   return response.arrayBuffer();
 }
@@ -90,6 +98,14 @@ export async function uploadSharePointFile(path, content, contentType = "applica
     method: "PUT",
     headers: { "Content-Type": contentType },
     body: content,
+  });
+}
+
+export async function deleteSharePointFile(path) {
+  const driveId = await resolveDriveId();
+  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
+  await graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}`, {
+    method: "DELETE",
   });
 }
 

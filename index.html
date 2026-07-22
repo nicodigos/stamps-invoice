@@ -96,6 +96,10 @@
             <div class="section-heading">
               <h2>Stamp and upload invoice</h2>
               <div class="toolbar">
+                <button class="btn" id="undo-upload-btn" type="button">
+                  <i data-lucide="undo-2"></i>
+                  <span>Undo</span>
+                </button>
                 <button class="btn" id="autofill-btn" type="button">
                   <i data-lucide="sparkles"></i>
                   <span>Auto-fill</span>
@@ -181,9 +185,17 @@
                   <option value="Cash">Cash</option>
                 </select>
               </label>
+              <label class="field" id="income-transaction-number-field" hidden>
+                <span>Transaction number</span>
+                <input id="income-transaction-number-input" type="text" autocomplete="off">
+              </label>
               <label class="field" id="category-field">
                 <span>Category</span>
-                <select id="category-input" required></select>
+                <div class="combo-field">
+                  <input id="category-search-input" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="category-options" aria-expanded="false">
+                  <select id="category-input" hidden aria-hidden="true" tabindex="-1"></select>
+                  <ul class="combo-options" id="category-options" role="listbox" hidden></ul>
+                </div>
               </label>
               <label class="field" id="payment-code-field">
                 <span id="payment-code-label">Payment Code</span>
@@ -192,6 +204,11 @@
               <label class="field" id="client-invoice-field">
                 <span id="client-invoice-label">Client Invoice</span>
                 <textarea id="client-invoice-input" rows="3" autocomplete="off" required></textarea>
+              </label>
+              <label class="field field-wide" id="stamp-file-name-field">
+                <span>File name</span>
+                <input id="stamp-file-name-input" type="text" readonly title="Click to edit the generated file name">
+                <small>Generated automatically. Click the field to edit it manually.</small>
               </label>
             </div>
             <section class="upload-preview-panel" id="upload-preview-panel">

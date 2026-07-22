@@ -1,3 +1,5 @@
+import { describeError } from "../error-utils.mjs";
+
 export function $(selector) {
   return document.querySelector(selector);
 }
@@ -8,7 +10,7 @@ export function showFlash(message, type = "info") {
   window.clearTimeout(window.__flashHideTimer);
   flash.hidden = false;
   flash.className = `flash ${type}`;
-  flash.textContent = message;
+  flash.textContent = type === "error" ? describeError(message) : message;
   const timeout = type === "error" ? 7000 : type === "warning" ? 6000 : 4200;
   window.__flashTimer = window.setTimeout(() => clearFlash(), timeout);
 }

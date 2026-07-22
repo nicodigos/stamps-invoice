@@ -275,7 +275,7 @@ async function runGuarded(work) {
     clearFlash();
     await work();
   } catch (error) {
-    showFlash(error.message, "error");
+    showFlash(error, "error");
   }
 }
 

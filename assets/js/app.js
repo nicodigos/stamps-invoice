@@ -16,8 +16,13 @@ import {
   STAMP_BANK_TO_TEMPLATE_BANK,
   TEMPLATE_MONTHS,
 } from "./data.js";
-import { downloadSharePointFile, ensureSharePointFolderPath, listSharePointFileNames, listSharePointFolders, uploadSharePointFile } from "./graph.js";
+import { deleteSharePointFile, downloadSharePointFile, ensureSharePointFolderPath, listSharePointFileNames, listSharePointFolders, uploadSharePointFile } from "./graph.js";
 import { assertValidPdfBytes, emailFileToPreview, fileToAnalysisPayload, mergePdfBytes, stampPdfBytes, uploadedFileToPdfBytes } from "./pdf.js";
+import { filterOptionsContaining } from "./combo-utils.mjs";
+import { describeHttpError } from "./error-utils.mjs";
+import { mergeQueuedFileItems } from "./file-queue.mjs";
+import { assertMatchingSha256, sha256Hex } from "./hash-utils.mjs";
+import { singleFlight } from "./single-flight.mjs";
 import {
   $,
   clearFlash,
@@ -58,7 +63,11 @@ const elements = {
   incomeAmountInput: $("#income-amount-input"),
   incomePaymentTypeField: $("#income-payment-type-field"),
   incomePaymentTypeInput: $("#income-payment-type-input"),
+  incomeTransactionNumberField: $("#income-transaction-number-field"),
+  incomeTransactionNumberInput: $("#income-transaction-number-input"),
   categoryInput: $("#category-input"),
+  categorySearchInput: $("#category-search-input"),
+  categoryOptions: $("#category-options"),
   folderStructureLegacyInput: $("#folder-structure-legacy-input"),
   folderStructureInput: $("#folder-structure-input"),
   newFolderRootField: $("#new-folder-root-field"),
@@ -68,6 +77,8 @@ const elements = {
   paymentCodeLabel: $("#payment-code-label"),
   clientInvoiceInput: $("#client-invoice-input"),
   clientInvoiceLabel: $("#client-invoice-label"),
+  stampFileNameInput: $("#stamp-file-name-input"),
+  undoUploadBtn: $("#undo-upload-btn"),
   autofillBtn: $("#autofill-btn"),
   processBtn: $("#process-btn"),
   stampResult: $("#stamp-result"),
@@ -110,7 +121,7 @@ const elements = {
   folderConfirmCreate: $("#folder-confirm-create"),
 };
 
-boot().catch((error) => showFlash(error.message, "error"));
+boot().catch((error) => showFlash(error, "error"));
 
 let queuedFiles = [];
 let currentFileTreeResult = null;
@@ -124,6 +135,11 @@ let stampFolderOptionsRequestId = 0;
 let discoveredCompanyFolders = false;
 let accountNumberFolderOptions = [];
 let autoFillInProgress = false;
+let categoryOptionFocusIndex = -1;
+let stampFileNameEditedManually = false;
+const processAndUploadInvoiceOnce = singleFlight(processAndUploadInvoice);
+const undoLastUploadOnce = singleFlight(undoLastUpload);
+const LAST_STAMP_UPLOAD_KEY = "lastStampUpload";
 const BANK_ACCOUNTS_WORKBOOK_PATH = "General/Cuentas Bancarias NO MOVER.xlsx";
 const NOT_IDENTIFIED_FOLDER = "Not Identified";
 const LEGACY_MIN_UPLOAD_DATE = new Date("2026-01-01T00:00:00");
@@ -252,6 +268,7 @@ function updateHeaderNavScrollButtons() {
 
 function wireButtons() {
   elements.microsoftAuthBtn.addEventListener("click", () => runGuarded(toggleMicrosoft));
+  elements.undoUploadBtn.addEventListener("click", () => runGuarded(undoLastUploadOnce));
   elements.invoiceFile.addEventListener("change", () => {
     addFilesToQueue(Array.from(elements.invoiceFile.files || []));
     elements.invoiceFile.value = "";
@@ -293,7 +310,7 @@ function wireButtons() {
   });
   elements.stampForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    runGuarded(processAndUploadInvoice);
+    runGuarded(processAndUploadInvoiceOnce);
   });
   elements.autofillBtn.addEventListener("click", () => runGuarded(autoFillFromQueuedFiles));
   elements.invoiceDownloadBtn.addEventListener("click", () => runGuarded(downloadCnetInvoices));
@@ -312,8 +329,25 @@ function wireButtons() {
   elements.companyInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
   elements.dateInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
   elements.categoryInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.categorySearchInput.addEventListener("focus", renderCategoryOptions);
+  elements.categorySearchInput.addEventListener("input", () => {
+    elements.categoryInput.value = "";
+    categoryOptionFocusIndex = -1;
+    syncStampFolderControlVisibility();
+    renderCategoryOptions();
+  });
+  elements.categorySearchInput.addEventListener("keydown", handleCategorySearchKeydown);
+  elements.categoryOptions.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const button = event.target.closest("[data-category-value]");
+    if (button) selectCategoryValue(button.dataset.categoryValue);
+  });
   elements.newBankInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
   elements.accountTypeInput.addEventListener("change", () => runGuarded(refreshStampFolderControls));
+  elements.stampForm.addEventListener("input", resetManualStampFileNameWhenSourceChanges);
+  elements.stampForm.addEventListener("change", resetManualStampFileNameWhenSourceChanges);
+  elements.stampFileNameInput.addEventListener("click", enableManualStampFileNameEditing);
+  elements.stampFileNameInput.addEventListener("blur", normalizeManualStampFileName);
   elements.accountNumberInput.addEventListener("focus", renderAccountNumberOptions);
   elements.accountNumberInput.addEventListener("input", () => {
     elements.accountNumberInput.value = lastFourDigits(elements.accountNumberInput.value);
@@ -339,8 +373,10 @@ function wireButtons() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !elements.folderConfirmModal.hidden) closeFolderCreationDialog(false);
     if (event.key === "Escape") hideAccountNumberOptions();
+    if (event.key === "Escape") hideCategoryOptions();
   });
   document.addEventListener("pointerdown", closeAccountNumberOptionsOnOutsidePointer, true);
+  document.addEventListener("pointerdown", closeCategoryOptionsOnOutsidePointer, true);
   elements.templateCompanyInput.addEventListener("change", renderFolderTemplate);
   elements.templateYearInput.addEventListener("change", renderFolderTemplate);
   elements.templateMonthInput.addEventListener("change", renderFolderTemplate);
@@ -366,12 +402,15 @@ function addFilesToQueue(files) {
   if (files.length) {
     resetStampFolderRoot();
   }
-  for (const file of files) {
-    queuedFiles.push({
+  const incomingItems = files.map((file) => ({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       file,
-    });
-  }
+  }));
+  queuedFiles = mergeQueuedFileItems(queuedFiles, incomingItems);
+  const retainedIds = new Set(queuedFiles.map((item) => item.id));
+  excludedEmailAttachmentKeysByFileId = new Map(
+    Array.from(excludedEmailAttachmentKeysByFileId).filter(([fileId]) => retainedIds.has(fileId)),
+  );
   renderUploadQueue();
 }
 
@@ -589,7 +628,7 @@ async function autoFillFromQueuedFiles() {
       }),
     });
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(describeHttpError("AI auto-fill", response.status, await response.text()));
     }
 
     const result = await response.json();
@@ -612,6 +651,8 @@ function applyAutoFillResult(result, folderRoot = currentStampFolderRoot()) {
   } else if (folderRoot === "Statements") {
     applyStatementsAutoFillResult(result);
   }
+  syncCategorySearchInput();
+  resetManualStampFileName();
   runGuarded(refreshStampFolderControls);
 }
 
@@ -754,6 +795,66 @@ function hideAccountNumberOptions() {
   elements.accountNumberOptions.hidden = true;
 }
 
+function categorySelectOptions() {
+  return Array.from(elements.categoryInput.options)
+    .filter((option) => option.value)
+    .map((option) => ({ value: option.value, label: option.textContent }));
+}
+
+function renderCategoryOptions() {
+  const visibleOptions = filterOptionsContaining(categorySelectOptions(), elements.categorySearchInput.value);
+  if (categoryOptionFocusIndex >= visibleOptions.length) categoryOptionFocusIndex = visibleOptions.length - 1;
+  elements.categoryOptions.innerHTML = visibleOptions.map((option, index) => `
+    <li role="option" id="category-option-${index}" aria-selected="${index === categoryOptionFocusIndex}">
+      <button class="${index === categoryOptionFocusIndex ? "is-active" : ""}" type="button" data-category-value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>
+    </li>
+  `).join("");
+  const shouldShow = document.activeElement === elements.categorySearchInput && visibleOptions.length > 0;
+  elements.categoryOptions.hidden = !shouldShow;
+  elements.categorySearchInput.setAttribute("aria-expanded", String(shouldShow));
+  elements.categorySearchInput.setAttribute("aria-activedescendant", categoryOptionFocusIndex >= 0 ? `category-option-${categoryOptionFocusIndex}` : "");
+}
+
+function handleCategorySearchKeydown(event) {
+  const visibleOptions = filterOptionsContaining(categorySelectOptions(), elements.categorySearchInput.value);
+  if (!visibleOptions.length) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    categoryOptionFocusIndex = (categoryOptionFocusIndex + direction + visibleOptions.length) % visibleOptions.length;
+    renderCategoryOptions();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const selected = visibleOptions[categoryOptionFocusIndex < 0 ? 0 : categoryOptionFocusIndex];
+    selectCategoryValue(selected.value);
+  } else if (event.key === "Escape") {
+    hideCategoryOptions();
+  }
+}
+
+function selectCategoryValue(value) {
+  elements.categoryInput.value = value;
+  syncCategorySearchInput();
+  hideCategoryOptions();
+  elements.categoryInput.dispatchEvent(new Event("change"));
+}
+
+function syncCategorySearchInput() {
+  elements.categorySearchInput.value = elements.categoryInput.selectedOptions[0]?.value
+    ? elements.categoryInput.selectedOptions[0].textContent
+    : "";
+}
+
+function hideCategoryOptions() {
+  elements.categoryOptions.hidden = true;
+  elements.categorySearchInput.setAttribute("aria-expanded", "false");
+  categoryOptionFocusIndex = -1;
+}
+
+function closeCategoryOptionsOnOutsidePointer(event) {
+  if (!elements.categorySearchInput.closest(".combo-field").contains(event.target)) hideCategoryOptions();
+}
+
 function lastFourDigits(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 4);
 }
@@ -780,7 +881,7 @@ async function connectMicrosoft() {
   clearFlash();
   const response = await fetch("/.netlify/functions/microsoft-login");
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(describeHttpError("Microsoft connection", response.status, await response.text()));
   }
   const payload = await response.json();
   localStorage.setItem("msalState", payload.state);
@@ -801,7 +902,7 @@ async function completeMicrosoftRedirectIfNeeded() {
   const redirectUri = window.location.origin + "/";
   const response = await fetch(`/.netlify/functions/microsoft-callback?code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}`);
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(describeHttpError("Microsoft sign-in", response.status, await response.text()));
   }
   const payload = await response.json();
   state.graphToken = payload.accessToken;
@@ -853,6 +954,7 @@ async function processAndUploadInvoice() {
     const clientInvoice = elements.clientInvoiceInput.value.trim();
     const incomeAmount = elements.incomeAmountInput.value.trim();
     const incomePaymentType = elements.incomePaymentTypeInput.value.trim();
+    const incomeTransactionNumber = elements.incomeTransactionNumberInput.value.trim();
     const suggestedTitle = paymentCode;
     const description = clientInvoice;
     if (isDocuments) {
@@ -889,7 +991,7 @@ async function processAndUploadInvoice() {
     });
     await assertValidPdfBytes(stampedBytes, "Generated stamped PDF");
 
-    const initialFileName = isDocuments
+    const generatedFileName = isDocuments
       ? buildDocumentsFileName({ suggestedTitle })
       : isStatements
         ? buildDocumentsFileName({ suggestedTitle })
@@ -904,7 +1006,10 @@ async function processAndUploadInvoice() {
                 accountNumber: elements.accountNumberInput.value,
               })
             : buildLegacyStampedFileName({ paymentCode, clientInvoice, date })
-          : buildGeneralStampedFileName({ category, date });
+          : buildGeneralStampedFileName({ category, date, transactionNumber: isIncome ? incomeTransactionNumber : "" });
+    const initialFileName = stampFileNameEditedManually
+      ? validatedManualStampFileName()
+      : generatedFileName;
     const targetPaths = buildTargetPaths({
       company: elements.companyInput.value,
       bank: currentStampBankValue(),
@@ -936,6 +1041,7 @@ async function processAndUploadInvoice() {
       assertUploadedPdfSize(uploadedItem, stampedBytes, targetPath);
       const savedBytes = await downloadSharePointFile(targetPath);
       await assertValidPdfBytes(savedBytes, `Saved PDF ${targetPath}`);
+      await assertMatchingSha256(stampedBytes, savedBytes, `Saved PDF ${targetPath}`);
     }
 
     if (state.stampedBlobUrl) URL.revokeObjectURL(state.stampedBlobUrl);
@@ -944,14 +1050,206 @@ async function processAndUploadInvoice() {
     elements.downloadLink.download = fileName;
     renderStampResultPaths(targetPaths);
     elements.stampResult.hidden = false;
+    saveLastStampUpload({
+      fileName,
+      targetPaths: targetPaths.targetPaths,
+      sha256: await sha256Hex(stampedBytes),
+    });
     queuedFiles = [];
     excludedEmailAttachmentKeysByFileId = new Map();
     renderUploadQueue();
+    resetStampFieldsAfterProcessing();
     showFlash(`${filesToProcess.length} file${filesToProcess.length === 1 ? "" : "s"} combined into one PDF and uploaded successfully.`, "success");
   } finally {
     elements.processBtn.disabled = false;
     elements.processBtn.querySelector("span").textContent = "Process";
   }
+}
+
+function saveLastStampUpload({ fileName, targetPaths, sha256 }) {
+  sessionStorage.setItem(LAST_STAMP_UPLOAD_KEY, JSON.stringify({
+    fileName,
+    targetPaths: [...targetPaths],
+    sha256,
+    createdAt: new Date().toISOString(),
+  }));
+}
+
+function readLastStampUpload() {
+  try {
+    const record = JSON.parse(sessionStorage.getItem(LAST_STAMP_UPLOAD_KEY) || "null");
+    if (!record || !Array.isArray(record.targetPaths) || !record.targetPaths.length || !record.sha256) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+async function undoLastUpload() {
+  const record = readLastStampUpload();
+  if (!record) {
+    showFlash("There is no uploaded file to undo.", "info");
+    return;
+  }
+
+  elements.undoUploadBtn.disabled = true;
+  elements.undoUploadBtn.querySelector("span").textContent = "Undoing";
+  try {
+    showFlash("Verifying the last uploaded file...", "info");
+    for (const targetPath of record.targetPaths) {
+      const savedBytes = await downloadSharePointFile(targetPath);
+      const savedHash = await sha256Hex(savedBytes);
+      if (savedHash !== record.sha256) {
+        throw new Error(`Undo stopped because the SharePoint file changed: ${targetPath}`);
+      }
+    }
+
+    const remainingPaths = [...record.targetPaths];
+    for (const targetPath of record.targetPaths) {
+      await deleteSharePointFile(targetPath);
+      remainingPaths.shift();
+      if (remainingPaths.length) {
+        sessionStorage.setItem(LAST_STAMP_UPLOAD_KEY, JSON.stringify({ ...record, targetPaths: remainingPaths }));
+      } else {
+        sessionStorage.removeItem(LAST_STAMP_UPLOAD_KEY);
+      }
+    }
+    elements.stampResult.hidden = true;
+    showFlash(`Upload undone: ${record.fileName}`, "success");
+  } finally {
+    elements.undoUploadBtn.disabled = false;
+    elements.undoUploadBtn.querySelector("span").textContent = "Undo";
+  }
+}
+
+function resetStampFieldsAfterProcessing() {
+  elements.invoiceFile.value = "";
+  resetStampFolderRoot();
+  [
+    elements.dateInput,
+    elements.companyInput,
+    elements.bankInput,
+    elements.newBankInput,
+    elements.accountTypeInput,
+    elements.accountNumberInput,
+    elements.incomeAmountInput,
+    elements.incomePaymentTypeInput,
+    elements.incomeTransactionNumberInput,
+    elements.categoryInput,
+    elements.categorySearchInput,
+    elements.paymentCodeInput,
+    elements.clientInvoiceInput,
+  ].forEach(clearInputValue);
+  hideAccountNumberOptions();
+  syncStampFolderControlVisibility();
+  resetManualStampFileName();
+}
+
+const STAMP_FILE_NAME_SOURCE_IDS = new Set([
+  "folder-structure-legacy-input",
+  "folder-structure-input",
+  "new-folder-root-none-input",
+  "new-folder-root-documents-input",
+  "new-folder-root-expenses-input",
+  "new-folder-root-income-input",
+  "new-folder-root-statements-input",
+  "date-input",
+  "bank-input",
+  "new-bank-input",
+  "account-type-input",
+  "account-number-input",
+  "category-input",
+  "category-search-input",
+  "payment-code-input",
+  "client-invoice-input",
+  "income-transaction-number-input",
+]);
+
+function resetManualStampFileNameWhenSourceChanges(event) {
+  if (!STAMP_FILE_NAME_SOURCE_IDS.has(event.target.id)) return;
+  resetManualStampFileName();
+}
+
+function resetManualStampFileName() {
+  stampFileNameEditedManually = false;
+  elements.stampFileNameInput.readOnly = true;
+  elements.stampFileNameInput.value = currentGeneratedStampFileName();
+}
+
+function currentGeneratedStampFileName() {
+  const category = currentStampEffectiveCategory();
+  const paymentCode = elements.paymentCodeInput.value.trim();
+  const clientInvoice = elements.clientInvoiceInput.value.trim();
+  if (currentStampRootIsDocuments() || currentStampRootIsStatements()) {
+    return paymentCode ? buildDocumentsFileName({ suggestedTitle: paymentCode }) : "";
+  }
+
+  let datePart = "";
+  try {
+    datePart = yyyymmdd(parseIsoDate(elements.dateInput.value));
+  } catch {
+    // Keep building a progressive preview from the fields that are available.
+  }
+
+  if (currentStampRootIsExpenses()) {
+    const parts = [];
+    if (stampUsesNewFolderStructure()) {
+      try {
+        parts.push(expenseFileNamePrefix({
+          bank: currentStampBankValue(),
+          accountType: elements.accountTypeInput.value,
+          accountNumber: elements.accountNumberInput.value,
+        }));
+      } catch {
+        // The bank prefix appears as soon as its required fields are selected.
+      }
+    }
+    if (paymentCode) parts.push(`P_${sanitizeFilename(paymentCode)}`);
+    if (clientInvoice) parts.push(`I_${sanitizeFilename(clientInvoice)}`);
+    if (datePart) parts.push(datePart);
+    return parts.length ? `${parts.join("_")}.pdf` : "";
+  }
+
+  if (currentStampRootIsIncome()) {
+    const typedCategory = elements.categorySearchInput.value.trim();
+    const label = stampCategoryLabel(category) || typedCategory;
+    const transactionNumber = elements.incomeTransactionNumberInput.value.trim();
+    const parts = ["Income"];
+    if (label) parts.push(sanitizeFilename(label));
+    if (transactionNumber) parts.push(`Transaction_${sanitizeFilename(transactionNumber)}`);
+    if (datePart) parts.push(datePart);
+    return `${parts.join("_")}.pdf`;
+  }
+
+  if (category && datePart) {
+    return buildGeneralStampedFileName({
+      category,
+      date: parseIsoDate(elements.dateInput.value),
+      transactionNumber: "",
+    });
+  }
+  return "";
+}
+
+function enableManualStampFileNameEditing() {
+  if (!elements.stampFileNameInput.readOnly) return;
+  stampFileNameEditedManually = true;
+  elements.stampFileNameInput.readOnly = false;
+  elements.stampFileNameInput.focus();
+  elements.stampFileNameInput.select();
+}
+
+function normalizeManualStampFileName() {
+  if (!stampFileNameEditedManually) return;
+  const rawName = elements.stampFileNameInput.value.trim().replace(/\.pdf$/i, "");
+  elements.stampFileNameInput.value = rawName ? `${sanitizeFilename(rawName, "document")}.pdf` : "";
+}
+
+function validatedManualStampFileName() {
+  normalizeManualStampFileName();
+  const fileName = elements.stampFileNameInput.value;
+  if (!fileName) throw new Error("File name is required.");
+  return fileName;
 }
 
 function assertUploadedPdfSize(uploadedItem, expectedBytes, targetPath) {
@@ -1008,10 +1306,11 @@ function buildDocumentsFileName({ suggestedTitle }) {
   return `${sanitizeFilename(suggestedTitle, "document")}.pdf`;
 }
 
-function buildGeneralStampedFileName({ category, date }) {
+function buildGeneralStampedFileName({ category, date, transactionNumber = "" }) {
   const root = currentStampFolderRoot() || "document";
   const label = stampCategoryLabel(category) || category || root;
-  return `${sanitizeFilename(root)}_${sanitizeFilename(label)}_${yyyymmdd(date)}.pdf`;
+  const transactionPart = transactionNumber ? `_Transaction_${sanitizeFilename(transactionNumber)}` : "";
+  return `${sanitizeFilename(root)}_${sanitizeFilename(label)}${transactionPart}_${yyyymmdd(date)}.pdf`;
 }
 
 async function uniqueSharePointFileName(folderPath, fileName) {
@@ -1109,6 +1408,7 @@ function syncStampCategoryOptions() {
   } else if (categories.includes(previousValue)) {
     elements.categoryInput.value = previousValue;
   }
+  syncCategorySearchInput();
   syncStampFolderControlVisibility();
   syncStampMetadataFields();
 }
@@ -1175,7 +1475,8 @@ function syncStampFolderControlVisibility() {
   elements.companyInput.closest(".field").hidden = !hasNewRoot;
   elements.companyInput.required = hasNewRoot;
   elements.categoryInput.closest(".field").hidden = !hasNewRoot || isStatements;
-  elements.categoryInput.required = hasNewRoot && !isStatements;
+  elements.categoryInput.required = false;
+  elements.categorySearchInput.required = hasNewRoot && !isStatements;
   elements.bankInput.closest(".field").hidden = newMode;
   elements.bankInput.required = !newMode;
   elements.newFolderRootField.hidden = !newMode;
@@ -1187,6 +1488,7 @@ function syncStampFolderControlVisibility() {
   elements.accountNumberField.hidden = !isExpenses || !needsAccount;
   elements.incomeAmountField.hidden = !isIncome;
   elements.incomePaymentTypeField.hidden = !isIncome;
+  elements.incomeTransactionNumberField.hidden = !isIncome;
   syncAutoFillButtonState();
   syncStampMetadataFields();
 }
@@ -1843,7 +2145,7 @@ async function postJson(url, payload) {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(cleanErrorText(await response.text()));
+    throw new Error(describeHttpError("Server request", response.status, cleanErrorText(await response.text())));
   }
   return response.json();
 }
@@ -2066,7 +2368,7 @@ async function downloadGraphFile(fileId) {
   const response = await fetch(`https://graph.microsoft.com/v1.0/drives/${driveId}/items/${encodeURIComponent(fileId)}/content`, {
     headers: { Authorization: `Bearer ${state.graphToken}` },
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error(describeHttpError("SharePoint file download", response.status, await response.text()));
   return response.blob();
 }
 
@@ -2106,6 +2408,6 @@ async function runGuarded(work) {
     clearFlash();
     await work();
   } catch (error) {
-    showFlash(error.message || String(error), "error");
+    showFlash(error, "error");
   }
 }

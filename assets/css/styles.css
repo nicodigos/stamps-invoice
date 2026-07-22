@@ -582,12 +582,17 @@ main {
 
 #stamp-form #income-amount-field,
 #stamp-form #income-payment-type-field,
+#stamp-form #income-transaction-number-field,
 #stamp-form #payment-code-field {
   order: 60;
 }
 
 #stamp-form #client-invoice-field {
   order: 70;
+}
+
+#stamp-form #stamp-file-name-field {
+  order: 80;
 }
 
 #stamp-form.is-expenses-root #company-field {
@@ -1208,7 +1213,8 @@ pre {
 }
 
 .combo-options button:hover,
-.combo-options button:focus {
+.combo-options button:focus,
+.combo-options button.is-active {
   outline: none;
   background: var(--accent-soft);
   color: var(--accent-strong);
